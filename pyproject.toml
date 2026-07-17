@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "strataevo"
+version = "0.1.0"
+description = "A self-evolving agent research platform built on Tinyagent and vLLM."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+dependencies = [
+    "accelerate==1.14.0",
+    "datasets==5.0.0",
+    "flashinfer-python==0.6.13",
+    "httpx==0.28.1",
+    "orjson==3.11.9",
+    "peft==0.19.1",
+    "prompt-toolkit==3.0.52",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "pyyaml==6.0.3",
+    "safetensors==0.8.0",
+    "sentencepiece==0.2.2",
+    "tokenizers==0.22.2",
+    "torch==2.11.0",
+    "torchaudio==2.11.0",
+    "torchvision==0.26.0",
+    "tqdm==4.68.4",
+    "transformers==5.13.1",
+    "vllm==0.25.1",
+]
+
+[project.scripts]
+tinyagent = "tinyagent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tinyagent"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.8.0",
+]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
+environments = ["sys_platform == 'linux' and python_version == '3.12'"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
