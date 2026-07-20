@@ -29,7 +29,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generations", type=int, default=1)
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
-    parser.add_argument("--mutator-max-steps", type=int, default=20)
+    parser.add_argument("--mutator-max-steps", type=int, default=30)
     parser.add_argument("--eval-limit", type=int, default=5)
     parser.add_argument("--eval-offset", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=4)
@@ -174,6 +174,7 @@ def run_one_generation(config_path: Path) -> int:
                 parent_commit,
                 None,
                 "rejected",
+                "no_change",
                 "meta-agent produced no source changes",
                 [],
                 None,
@@ -195,6 +196,7 @@ def run_one_generation(config_path: Path) -> int:
                 plan_report,
                 agent_result,
             )
+            _print_generation(record)
             return 0
 
         git.stage()
@@ -210,6 +212,7 @@ def run_one_generation(config_path: Path) -> int:
                 parent_commit,
                 None,
                 "rejected",
+                "validation_failed",
                 "fixed validation commands failed",
                 changed_paths,
                 patch_path,
@@ -231,6 +234,7 @@ def run_one_generation(config_path: Path) -> int:
                 plan_report,
                 agent_result,
             )
+            _print_generation(record)
             return 0
 
         candidate_report = evaluator.evaluate(generation_dir / "evaluation")
@@ -251,6 +255,7 @@ def run_one_generation(config_path: Path) -> int:
             parent_commit,
             resulting_commit,
             decision,
+            "accepted" if accepted else "benchmark_rejected",
             reason,
             changed_paths,
             patch_path,
@@ -272,10 +277,7 @@ def run_one_generation(config_path: Path) -> int:
             plan_report,
             agent_result,
         )
-        print(
-            f"generation={generation} decision={decision} "
-            f"score={candidate_report.task_score:.4f} utility={candidate_report.utility:.6f}"
-        )
+        _print_generation(record)
         return 0
     except Exception as error:
         if git.changed_paths():
@@ -327,6 +329,7 @@ def _record(
     parent_commit: str,
     resulting_commit: str | None,
     decision: str,
+    outcome_type: str,
     reason: str,
     changed_paths: list[str],
     patch_path: Path | None,
@@ -343,6 +346,7 @@ def _record(
         parent_commit=parent_commit,
         resulting_commit=resulting_commit,
         decision=decision,
+        outcome_type=outcome_type,
         reason=reason,
         changed_paths=changed_paths,
         patch_path=str(patch_path) if patch_path else None,
@@ -393,6 +397,20 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise ValueError(f"{name} must be positive")
     if args.eval_offset < 0 or args.max_score_drop < 0:
         raise ValueError("eval-offset and max-score-drop must be non-negative")
+
+
+def _print_generation(record: GenerationRecord) -> None:
+    candidate = record.candidate_report
+    metrics = ""
+    if candidate:
+        metrics = (
+            f" score={float(candidate['task_score']):.4f} utility={float(candidate['utility']):.6f}"
+        )
+    print(
+        f"generation={record.generation} decision={record.decision} "
+        f"outcome={record.outcome_type}{metrics} reason={record.reason}",
+        flush=True,
+    )
 
 
 def _prepare_generation_dir(path: Path) -> None:

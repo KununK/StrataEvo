@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from strataevo.evolution.cli import _prepare_generation_dir, _promotion_decision, run_one_generation
+from strataevo.evolution.cli import (
+    _prepare_generation_dir,
+    _promotion_decision,
+    parse_args,
+    run_one_generation,
+)
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
 from strataevo.evolution.plan import (
@@ -20,6 +25,9 @@ from tinyagent import AgentResult, Message, Usage
 
 
 class EvolutionTests(unittest.TestCase):
+    def test_mutator_default_reserves_repair_budget(self):
+        self.assertEqual(parse_args([]).mutator_max_steps, 30)
+
     def test_self_workspace_can_only_write_evolvable_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -32,6 +40,18 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(
                 (root / "src/tinyagent/new.py").read_text(encoding="utf-8"),
                 "VALUE = 1\n",
+            )
+            tools["replace_lines"].run(
+                {
+                    "path": "src/tinyagent/new.py",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "content": "VALUE = 2",
+                }
+            )
+            self.assertEqual(
+                (root / "src/tinyagent/new.py").read_text(encoding="utf-8"),
+                "VALUE = 2\n",
             )
             with self.assertRaises(PermissionError):
                 tools["write_file"].run({"path": "tests/test_backdoor.py", "content": "pass\n"})
@@ -178,6 +198,7 @@ class EvolutionTests(unittest.TestCase):
                 (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
             )
             self.assertEqual(record["decision"], "accepted")
+            self.assertEqual(record["outcome_type"], "accepted")
             self.assertEqual(record["diagnosed_layers"], ["architecture"])
             self.assertEqual(record["planned_layer"], "architecture")
             memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
@@ -272,6 +293,7 @@ class EvolutionTests(unittest.TestCase):
                 (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
             )
             self.assertEqual(record["decision"], "rejected")
+            self.assertEqual(record["outcome_type"], "no_change")
             memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
             self.assertEqual(len(memory), 1)
             self.assertEqual(memory[0]["decision"], "rejected")

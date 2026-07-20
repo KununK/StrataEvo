@@ -50,6 +50,7 @@ class EvolutionMemoryTests(unittest.TestCase):
             parent_commit=f"parent-{generation}",
             resulting_commit=f"child-{generation}" if decision == "accepted" else None,
             decision=decision,
+            outcome_type="accepted" if decision == "accepted" else "benchmark_rejected",
             reason="test outcome",
             diagnoses=[
                 MemoryDiagnosis(

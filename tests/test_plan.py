@@ -17,7 +17,12 @@ class EvolutionPlanTests(unittest.TestCase):
             [ModelResponse(Message("assistant", json.dumps(self._plan())), Usage(50, 20))]
         )
 
-        report = EvolutionPlanner(model).create_plan(self._diagnosis(), self._parent())
+        report = EvolutionPlanner(model).create_plan(
+            self._diagnosis(),
+            self._parent(),
+            mutable_paths=["src/tinyagent"],
+            existing_files=["src/tinyagent/agent.py", "src/tinyagent/workspace.py"],
+        )
 
         self.assertEqual(report.plan.target_diagnosis, 1)
         self.assertEqual(report.plan.primary_layer, EvolutionLayer.ARCHITECTURE)
@@ -26,6 +31,24 @@ class EvolutionPlanTests(unittest.TestCase):
         request = model.requests[0][1].content
         self.assertIn('"available_metrics"', request)
         self.assertIn('"signal:artifact_missing": 2.0', request)
+        self.assertIn('"src/tinyagent/workspace.py"', request)
+
+    def test_likely_files_must_be_inside_mutable_paths(self):
+        invalid = self._plan()
+        invalid["likely_files"] = ["src/core/execution_engine.py"]
+        model = ScriptedModel(
+            [
+                Message("assistant", json.dumps(invalid)),
+                Message("assistant", json.dumps(self._plan())),
+            ]
+        )
+
+        report = EvolutionPlanner(model).create_plan(
+            self._diagnosis(), self._parent(), mutable_paths=["src/tinyagent"]
+        )
+
+        self.assertEqual(len(report.attempts), 2)
+        self.assertIn("outside mutable paths", model.requests[1][-1].content)
 
     def test_plan_layer_must_match_selected_diagnosis(self):
         invalid = self._plan()

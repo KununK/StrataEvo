@@ -171,6 +171,9 @@ StrataEvo 现在支持代码库级递归自进化：系统先将候选代码、�
 预期指标对照及接受或拒绝结果会写入
 `evolution/runs/<run_name>/evolution_memory.jsonl`，供后续代诊断和修改时参考。
 
+Planner 会看到实际可修改源码清单，执行器支持精确文本替换和按行替换，并将每代结果区分为
+无修改、固定验证失败、基准拒绝或接受，避免把执行失败误认为演化方向无效。
+
 ```bash
 strataevo --run-name humaneval-dev --generations 1 --eval-limit 5
 ```

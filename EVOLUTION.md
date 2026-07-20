@@ -78,6 +78,9 @@ strataevo \
 --max-score-drop          允许的任务分数下降，默认为 0
 ```
 
+`--mutator-max-steps` 默认是 `30`。该预算与 `--benchmark-max-steps` 相互独立：前者控制
+每代修改 StrataEvo 源码的 Agent，后者控制每道评测任务中的 Agent。
+
 ## 自修改过程
 
 Meta-Agent 可以使用以下受控工具：
@@ -88,6 +91,7 @@ read_file        阅读源码和评测记录
 search_files     搜索代码
 write_file       创建或重写可演化源码
 replace_text     精确修改源码
+replace_lines    按 read_file 返回的闭区间行号替换源码
 delete_file      删除可演化文件
 show_diff        查看当前自身修改
 run_validation   运行固定检查
@@ -95,6 +99,10 @@ run_validation   运行固定检查
 
 Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选择一项具体限制进行修改。
 修改首先保留在当前 Git 工作区中，不会立即成为新一代。
+
+`replace_text` 只接受恰好出现一次的原文；一次精确匹配失败后，应重新读取相关行并改用
+`replace_lines`，避免反复猜测空格。自修改提示要求在前三分之一预算内开始编辑，并保留
+最后三分之一用于查看 diff、运行固定验证和修复错误。
 
 ## 晋级规则
 
@@ -112,7 +120,7 @@ utility = pass@1
 2. 任务分数不低于配置的最低值；
 3. 效用严格高于父代。
 
-如果满足条件，修改会作为新一代提交到 `evo` 分支，下一代由新的 Python 进程加载。
+如果满足条件，修改会作为新一代提交到 `--branch` 指定的分支，下一代由新的 Python 进程加载。
 如果不满足条件，源码会恢复到父代，但本次尝试的补丁和评测记录仍会保留。
 
 ## 代际生效
@@ -249,6 +257,10 @@ prerequisites             实现长期价值需要的前置条件
 父代值、候选值以及是否符合预期。Planner 首次返回无效 JSON、错误诊断序号、层级不一致或
 不存在的指标时，会收到校验错误并默认修复一次。
 
+Planner 还会收到真实的可演化根目录和其中已有的文件清单。`likely_files` 必须位于这些
+可演化路径内，可以引用已有文件，也可以提出在可演化目录中新建文件；边界外的虚构路径会
+触发自动修复重试。
+
 长期价值目前只用于记录研究假设。一个修改即使可能帮助未来进化，仍必须通过当前固定测试、
 任务分数和 utility 晋级规则；本阶段不会因为推测性的长期价值接受当前无收益的候选。后续
 加入独立的进化能力评测后，可以利用这些字段重新分析“当前无用但具有未来价值”的改动。
@@ -263,6 +275,17 @@ changed_paths、patch path / excerpt、agent_output
 父代和候选的 task score / utility、utility delta
 accepted / rejected、原因和 resulting commit
 ```
+
+拒绝结果进一步区分为：
+
+```text
+no_change          自修改执行没有产生源码 diff，尚未检验演化假设
+validation_failed  产生了 diff，但固定代码检查失败，尚未进入任务评测
+benchmark_rejected 通过固定检查，但任务评测没有满足晋级条件
+accepted           通过固定检查和任务评测并已提交
+```
+
+Planner 会把前两类视为执行失败，而不是该演化方向已经被基准否定。
 
 Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复提出已被拒绝的假设。自修改
 执行器会优先读取与本次主要层或关联层匹配的历史，同时补充最近的其他记录。历史只作为

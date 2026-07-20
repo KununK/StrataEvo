@@ -61,6 +61,7 @@ def mutate(
     diagnosed_problem = json.dumps(selected_diagnosis.to_dict(), indent=2, ensure_ascii=False)
     evolution_plan = json.dumps(plan_report.plan.to_dict(), indent=2, ensure_ascii=False)
     prior_evolution = json.dumps(memory_context(history), indent=2, ensure_ascii=False)
+    mutable_paths = json.dumps(config.mutable_paths, ensure_ascii=False)
     prompt = f"""Create generation {generation} by improving your own implementation.
 
 Current evaluation report:
@@ -77,6 +78,16 @@ Evolution plan:
 
 Relevant prior evolution outcomes:
 {prior_evolution}
+
+Execution constraints:
+- Writable paths: {mutable_paths}
+- Total model/tool steps available: {config.mutator_max_steps}
+- Start the source edit within the first third of the budget.
+- Reserve the final third for show_diff, run_validation, and repairs.
+- Prefer the smallest direct change. Do not add a new subsystem when an existing prompt, tool,
+  schema, or control-flow check can address the evidence.
+- replace_text requires an exact match. After one mismatch, read the relevant lines and use
+  replace_lines instead of repeatedly guessing whitespace.
 
 Read the relevant implementation and evidence before editing. Execute one focused intervention
 consistent with the plan. Treat the hypothesis as testable, verify its evidence against the

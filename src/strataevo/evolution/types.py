@@ -16,7 +16,7 @@ class EvolutionConfig:
     generations: int = 1
     model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     base_url: str = "http://localhost:8000/v1"
-    mutator_max_steps: int = 20
+    mutator_max_steps: int = 30
     mutable_paths: list[str] = field(default_factory=lambda: list(DEFAULT_MUTABLE_PATHS))
     eval_limit: int = 5
     eval_offset: int = 0
@@ -58,6 +58,7 @@ class GenerationRecord:
     parent_commit: str
     resulting_commit: str | None
     decision: str
+    outcome_type: str
     reason: str
     changed_paths: list[str]
     patch_path: str | None

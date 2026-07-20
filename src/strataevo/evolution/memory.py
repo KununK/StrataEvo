@@ -52,6 +52,7 @@ class EvolutionMemoryEntry:
     parent_commit: str
     resulting_commit: str | None
     decision: str
+    outcome_type: str
     reason: str
     diagnoses: list[MemoryDiagnosis]
     plan: dict[str, Any]
@@ -74,6 +75,7 @@ class EvolutionMemoryEntry:
         return {
             "generation": self.generation,
             "decision": self.decision,
+            "outcome_type": self.outcome_type,
             "reason": self.reason,
             "diagnoses": [asdict(item) for item in self.diagnoses],
             "plan": self.plan,
@@ -105,11 +107,21 @@ class EvolutionMemoryEntry:
         values["changed_paths"] = _string_list(values.get("changed_paths", []), "changed_paths")
         values.setdefault("patch_path", None)
         values.setdefault("patch_excerpt", "")
+        values.setdefault(
+            "outcome_type", _legacy_outcome_type(values.get("decision"), values.get("reason"))
+        )
         entry = cls(**values)
         if entry.generation <= 0:
             raise ValueError("memory generation must be positive")
         if entry.decision not in {"accepted", "rejected"}:
             raise ValueError(f"invalid memory decision: {entry.decision}")
+        if entry.outcome_type not in {
+            "accepted",
+            "no_change",
+            "validation_failed",
+            "benchmark_rejected",
+        }:
+            raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
         return entry
 
     @classmethod
@@ -135,6 +147,7 @@ class EvolutionMemoryEntry:
             parent_commit=record.parent_commit,
             resulting_commit=record.resulting_commit,
             decision=record.decision,
+            outcome_type=record.outcome_type,
             reason=record.reason,
             diagnoses=[MemoryDiagnosis.from_dict(item.to_dict()) for item in diagnosis.diagnoses],
             plan=plan_report.plan.to_dict(),
@@ -251,3 +264,14 @@ def _object(value: Any, field_name: str) -> dict[str, Any]:
 def _validate_limit(limit: int) -> None:
     if limit <= 0:
         raise ValueError("memory context limit must be positive")
+
+
+def _legacy_outcome_type(decision: Any, reason: Any) -> str:
+    if decision == "accepted":
+        return "accepted"
+    text = str(reason or "")
+    if "no source changes" in text:
+        return "no_change"
+    if "validation" in text:
+        return "validation_failed"
+    return "benchmark_rejected"

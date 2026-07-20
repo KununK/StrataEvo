@@ -37,6 +37,7 @@ class DiagnosisTests(unittest.TestCase):
                 parent_commit="parent",
                 resulting_commit=None,
                 decision="rejected",
+                outcome_type="benchmark_rejected",
                 reason="utility did not improve",
                 diagnoses=[
                     MemoryDiagnosis(

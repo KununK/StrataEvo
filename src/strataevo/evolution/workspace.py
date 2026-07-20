@@ -84,7 +84,7 @@ class SelfWorkspace:
 
         @tool(requires_approval=True)
         def replace_text(path: str, old: str, new: str) -> str:
-            """Replace one exact occurrence in an evolvable source file."""
+            """Replace one exact occurrence; use replace_lines after an exact-match failure."""
             target = self._resolve_mutable(path)
             content = target.read_text(encoding="utf-8")
             count = content.count(old)
@@ -92,6 +92,23 @@ class SelfWorkspace:
                 raise ValueError(f"expected one occurrence, found {count}")
             target.write_text(content.replace(old, new), encoding="utf-8")
             return f"Updated {path}"
+
+        @tool(requires_approval=True)
+        def replace_lines(path: str, start_line: int, end_line: int, content: str) -> str:
+            """Replace an inclusive line range previously observed with read_file."""
+            if start_line < 1 or end_line < start_line:
+                raise ValueError("invalid line range")
+            target = self._resolve_mutable(path)
+            original = target.read_text(encoding="utf-8")
+            lines = original.splitlines(keepends=True)
+            if end_line > len(lines):
+                raise ValueError(f"end_line {end_line} exceeds file length {len(lines)}")
+            replacement = content
+            if replacement and not replacement.endswith(("\n", "\r")):
+                replacement += "\n"
+            lines[start_line - 1 : end_line] = replacement.splitlines(keepends=True)
+            target.write_text("".join(lines), encoding="utf-8")
+            return f"Updated lines {start_line}-{end_line} in {path}"
 
         @tool(requires_approval=True)
         def delete_file(path: str) -> str:
@@ -140,6 +157,7 @@ class SelfWorkspace:
             search_files,
             write_file,
             replace_text,
+            replace_lines,
             delete_file,
             show_diff,
             run_validation,

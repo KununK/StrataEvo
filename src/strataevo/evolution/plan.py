@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel
 
 from .diagnosis import DiagnosisReport, EvolutionLayer
 from .memory import EvolutionMemoryEntry, memory_context
-from .types import EvaluationReport, EvolutionConfig
+from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig
 
 
 class MetricDirection(StrEnum):
@@ -79,6 +79,7 @@ class EvolutionPlan:
         data: dict[str, Any],
         diagnosis: DiagnosisReport,
         available_metrics: set[str],
+        mutable_paths: list[str],
     ) -> EvolutionPlan:
         target = data.get("target_diagnosis")
         if not isinstance(target, int) or isinstance(target, bool):
@@ -109,6 +110,12 @@ class EvolutionPlan:
             raise ValueError("plan confidence must be numeric") from error
         if not 0.0 <= confidence <= 1.0:
             raise ValueError("plan confidence must be between 0 and 1")
+        likely_files = _string_list(data.get("likely_files", []), "likely_files")
+        if not likely_files:
+            raise ValueError("plan likely_files must not be empty")
+        invalid_files = [path for path in likely_files if not _is_mutable_path(path, mutable_paths)]
+        if invalid_files:
+            raise ValueError(f"plan likely_files are outside mutable paths: {invalid_files}")
         return cls(
             target_diagnosis=target,
             primary_layer=primary_layer,
@@ -117,7 +124,7 @@ class EvolutionPlan:
             expected_outcomes=[
                 ExpectedOutcome.from_dict(item, available_metrics) for item in raw_outcomes
             ],
-            likely_files=_string_list(data.get("likely_files", []), "likely_files"),
+            likely_files=likely_files,
             expected_long_term_value=expected_long_term_value,
             prerequisites=_string_list(data.get("prerequisites", []), "prerequisites"),
             confidence=confidence,
@@ -158,11 +165,19 @@ class EvolutionPlanner:
         diagnosis: DiagnosisReport,
         parent_report: EvaluationReport,
         history: list[EvolutionMemoryEntry] | None = None,
+        *,
+        mutable_paths: list[str] | None = None,
+        existing_files: list[str] | None = None,
     ) -> EvolutionPlanReport:
+        mutable_paths = list(mutable_paths or DEFAULT_MUTABLE_PATHS)
         available_metrics = evaluation_metrics(parent_report.to_dict())
         payload = {
             "diagnoses": [item.to_dict() for item in diagnosis.diagnoses],
             "available_metrics": available_metrics,
+            "repository": {
+                "mutable_paths": mutable_paths,
+                "existing_mutable_files": existing_files or [],
+            },
             "prior_evolution": memory_context(history or []),
         }
         messages = [
@@ -185,7 +200,9 @@ class EvolutionPlanner:
             output_tokens += response.usage.output_tokens
             try:
                 data = _parse_object(response.message.content)
-                plan = EvolutionPlan.from_dict(data, diagnosis, set(available_metrics))
+                plan = EvolutionPlan.from_dict(
+                    data, diagnosis, set(available_metrics), mutable_paths
+                )
             except ValueError as error:
                 last_error = error
                 if attempt_number == self.repair_retries:
@@ -219,11 +236,15 @@ Select exactly one supplied diagnosis. Prefer a direction supported by concrete 
 already disproven by prior evolution, and likely to produce a measurable improvement without
 regressing task quality. A rejected prior attempt does not prove the whole direction is useless,
 but repeating the same intervention requires new evidence or a materially different mechanism.
+Treat prior outcome_type=no_change or validation_failed as an execution failure, not benchmark
+evidence against its hypothesis. Use those records to choose a more executable intervention.
 
 Some changes may enable future improvements without helping the current benchmark immediately.
 Record that possibility in expected_long_term_value and prerequisites, but do not use speculative
 future value as proof of current benefit. Every plan must still have one or more outcomes measurable
-now using only names from available_metrics. likely_files are advisory and do not restrict edits.
+now using only names from available_metrics. Every likely_files entry must be an existing file from
+repository.existing_mutable_files or a plausible new file below repository.mutable_paths. These
+paths guide the mutation but do not narrow its configured write permissions.
 
 Return exactly this JSON object:
 {
@@ -252,13 +273,20 @@ def plan_evolution(
     history: list[EvolutionMemoryEntry],
     destination: str | Path,
 ) -> EvolutionPlanReport:
+    existing_files = mutable_source_files(config.repo, config.mutable_paths)
     model = OpenAICompatibleModel(
         model=config.model,
         base_url=config.base_url,
         temperature=0.0,
         timeout=300.0,
     )
-    report = EvolutionPlanner(model).create_plan(diagnosis, parent_report, history)
+    report = EvolutionPlanner(model).create_plan(
+        diagnosis,
+        parent_report,
+        history,
+        mutable_paths=config.mutable_paths,
+        existing_files=existing_files,
+    )
     _write_json(Path(destination), report.to_dict())
     return report
 
@@ -276,6 +304,25 @@ def evaluation_metrics(report: dict[str, Any]) -> dict[str, float]:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             values[f"signal:{name}"] = float(value)
     return dict(sorted(values.items()))
+
+
+def mutable_source_files(repo: str | Path, mutable_paths: list[str]) -> list[str]:
+    root = Path(repo).resolve()
+    files: list[str] = []
+    for relative in mutable_paths:
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError(f"mutable path escapes repository: {relative}")
+        if target.is_file():
+            candidates = [target]
+        elif target.is_dir():
+            candidates = target.rglob("*")
+        else:
+            candidates = []
+        for candidate in candidates:
+            if candidate.is_file() and "__pycache__" not in candidate.parts:
+                files.append(candidate.relative_to(root).as_posix())
+    return sorted(set(files))
 
 
 def observe_expected_outcomes(
@@ -355,6 +402,16 @@ def _string_list(value: Any, field_name: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"plan {field_name} must be a list of strings")
     return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+def _is_mutable_path(path: str, mutable_paths: list[str]) -> bool:
+    candidate = PurePosixPath(path)
+    if candidate.is_absolute() or ".." in candidate.parts or "\\" in path:
+        return False
+    return any(
+        candidate == root or root in candidate.parents
+        for root in (PurePosixPath(item) for item in mutable_paths)
+    )
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
