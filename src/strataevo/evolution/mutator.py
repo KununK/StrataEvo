@@ -14,6 +14,7 @@ from tinyagent import (
     allow_all,
 )
 
+from .diagnosis import DiagnosisReport
 from .types import EvaluationReport, EvolutionConfig
 from .workspace import SelfWorkspace
 
@@ -31,6 +32,7 @@ def mutate(
     config: EvolutionConfig,
     generation: int,
     parent_report: EvaluationReport,
+    diagnosis: DiagnosisReport,
     generation_dir: Path,
     commands: list[list[str]],
 ) -> AgentResult:
@@ -51,6 +53,9 @@ def mutate(
         session_store=SessionStore(generation_dir / "sessions"),
     )
     feedback = json.dumps(parent_report.to_dict(), indent=2, ensure_ascii=False)
+    diagnosed_problems = json.dumps(
+        [item.to_dict() for item in diagnosis.diagnoses], indent=2, ensure_ascii=False
+    )
     prompt = f"""Create generation {generation} by improving your own implementation.
 
 Current evaluation report:
@@ -59,8 +64,13 @@ Current evaluation report:
 Detailed trajectories and results are stored under:
 {parent_report.output_dir}
 
+Structured diagnosis:
+{diagnosed_problems}
+
 Read the relevant implementation and evidence before editing. Make a focused change that is
-expected to improve task score or reduce steps/tokens without reducing task score. Run the
-fixed validation command after editing. Your changes remain on disk for the external
-evolution controller to evaluate and either commit or roll back."""
+consistent with the diagnosed primary layer and is expected to improve task score or reduce
+steps/tokens without reducing task score. Treat the diagnosis as a testable hypothesis, verify
+its evidence against the referenced trajectories, and do not silently switch to an unrelated
+problem. Run the fixed validation command after editing. Your changes remain on disk for the
+external evolution controller to evaluate and either commit or roll back."""
     return agent.run(prompt, session_id=f"generation-{generation}")

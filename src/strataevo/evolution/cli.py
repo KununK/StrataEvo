@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .diagnosis import DiagnosisReport, diagnose_evaluation
 from .evaluation import HumanEvalEvaluator, run_commands, validation_commands
 from .git import GitRepository
 from .mutator import mutate
@@ -112,16 +113,19 @@ def run_one_generation(config_path: Path) -> int:
     state = _load_or_create_state(state_path, git, evaluator, run_dir)
     generation = int(state["next_generation"])
     generation_dir = run_dir / f"generation-{generation:04d}"
-    generation_dir.mkdir(parents=True, exist_ok=False)
+    _prepare_generation_dir(generation_dir)
     parent_commit = git.head()
     parent_report = EvaluationReport.from_dict(state["current_report"])
+    diagnosis_path = generation_dir / "diagnosis.json"
 
     try:
+        diagnosis = diagnose_evaluation(config, parent_report, diagnosis_path)
         agent_result = mutate(
             repo,
             config,
             generation,
             parent_report,
+            diagnosis,
             generation_dir,
             commands,
         )
@@ -148,6 +152,8 @@ def run_one_generation(config_path: Path) -> int:
                 "meta-agent produced no source changes",
                 [],
                 None,
+                diagnosis_path,
+                diagnosis,
                 parent_report,
                 None,
                 agent_result,
@@ -171,6 +177,8 @@ def run_one_generation(config_path: Path) -> int:
                 "fixed validation commands failed",
                 changed_paths,
                 patch_path,
+                diagnosis_path,
+                diagnosis,
                 parent_report,
                 None,
                 agent_result,
@@ -199,6 +207,8 @@ def run_one_generation(config_path: Path) -> int:
             reason,
             changed_paths,
             patch_path,
+            diagnosis_path,
+            diagnosis,
             parent_report,
             candidate_report,
             agent_result,
@@ -209,9 +219,13 @@ def run_one_generation(config_path: Path) -> int:
             f"score={candidate_report.task_score:.4f} utility={candidate_report.utility:.6f}"
         )
         return 0
-    except Exception:
+    except Exception as error:
         if git.changed_paths():
             git.rollback()
+        _write_json(
+            generation_dir / "failure.json",
+            {"error_type": type(error).__name__, "error": str(error)},
+        )
         raise
 
 
@@ -258,6 +272,8 @@ def _record(
     reason: str,
     changed_paths: list[str],
     patch_path: Path | None,
+    diagnosis_path: Path,
+    diagnosis: DiagnosisReport,
     parent_report: EvaluationReport,
     candidate_report: EvaluationReport | None,
     agent_result: Any,
@@ -270,6 +286,10 @@ def _record(
         reason=reason,
         changed_paths=changed_paths,
         patch_path=str(patch_path) if patch_path else None,
+        diagnosis_path=str(diagnosis_path),
+        diagnosed_layers=list(
+            dict.fromkeys(item.primary_layer.value for item in diagnosis.diagnoses)
+        ),
         parent_report=parent_report.to_dict(),
         candidate_report=candidate_report.to_dict() if candidate_report else None,
         agent_stop_reason=agent_result.stop_reason,
@@ -303,6 +323,22 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise ValueError(f"{name} must be positive")
     if args.eval_offset < 0 or args.max_score_drop < 0:
         raise ValueError("eval-offset and max-score-drop must be non-negative")
+
+
+def _prepare_generation_dir(path: Path) -> None:
+    if path.exists():
+        if (path / "record.json").exists():
+            raise RuntimeError(
+                f"completed generation already exists but state was not advanced: {path}"
+            )
+        sequence = 1
+        while True:
+            archive = path.with_name(f"{path.name}-failed-{sequence:04d}")
+            if not archive.exists():
+                path.rename(archive)
+                break
+            sequence += 1
+    path.mkdir(parents=True, exist_ok=False)
 
 
 def _git_output(repo: Path, arguments: list[str]) -> str:

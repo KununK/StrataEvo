@@ -163,9 +163,11 @@ def evaluate_candidate(candidate: str, task: str) -> dict:
 
 ## 自进化
 
-StrataEvo 现在支持代码库级递归自进化：Meta-Agent 阅读评测轨迹，修改自己的 Agent
-实现，通过固定测试和 HumanEval 重新评测后，改进版本会提交到 `evo` 分支，失败
-版本自动回滚。下一代由新的 Python 进程加载修改后的源码。
+StrataEvo 现在支持代码库级递归自进化：系统先将候选代码、任务结果和工具轨迹整理为
+结构化 Evidence，再由模型在 Model、Context、Tools 和 Architecture 四层中诊断主要
+演化对象。由 Tinyagent 运行实例承担的自修改角色根据诊断修改 StrataEvo，通过固定测试和
+HumanEval 重新评测后，改进版本会提交到 `evo` 分支，失败版本自动回滚。下一代由新的
+Python 进程加载修改后的源码。
 
 ```bash
 strataevo --run-name humaneval-dev --generations 1 --eval-limit 5

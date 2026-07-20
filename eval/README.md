@@ -47,6 +47,7 @@ eval/outputs/humaneval/<run_name>/
 ├── config.json       # 本次评测的完整参数
 ├── generations.jsonl # Agent 输出、工具轨迹、token 和步数
 ├── results.jsonl     # 每题判题结果
+├── evidence.json    # 自进化使用的结构化任务证据
 ├── sessions/         # 每道题独立的 Tinyagent session
 └── summary.json      # pass@1 和状态统计
 ```
@@ -62,6 +63,14 @@ eval/logs/humaneval/<run_name>.log
 
 默认支持断点续跑。设置 `FORCE_RERUN=1` 会删除该次运行的旧输出。
 断点续跑会追加文本日志；`FORCE_RERUN=1` 则会重新写入日志。
+
+自进化评测会在结束后自动生成 `evidence.json`。对于已有的独立评测结果，可以离线生成，
+不需要重新调用模型：
+
+```bash
+python -m strataevo.evolution.evidence \
+  eval/outputs/humaneval/qwen3-coder-30b-agent
+```
 
 也可以使用本地 JSON/JSONL 数据验证流程：
 

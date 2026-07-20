@@ -4,7 +4,9 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
 
 ```text
 评测父代
-  -> Meta-Agent 修改自身源码
+  -> 收集候选代码和工具轨迹为 Evidence
+  -> Diagnosis 判断主要演化层
+  -> 自修改执行器修改自身源码
   -> 执行固定的代码检查和测试
   -> 评测修改后的 Agent
   -> 提交改进版本或回滚
@@ -30,6 +32,8 @@ src/strataevo/evolution/mutator.py
 eval/                           评测基准和奖励信号
 tests/                          回归测试
 src/strataevo/evolution/cli.py  晋级控制器
+src/strataevo/evolution/diagnosis.py  四层诊断器
+src/strataevo/evolution/evidence.py  评测证据收集器
 src/strataevo/evolution/git.py  Git 提交和回滚
 ```
 
@@ -132,27 +136,89 @@ evolution/runs/<run_name>/
 ├── config.json
 ├── state.json
 ├── baseline/
-└── generation-0001/
+├── generation-0001/
+    ├── diagnosis.json
     ├── agent_result.json
     ├── changes.patch
     ├── record.json
     ├── validation.log
     ├── evaluation.log
     ├── evaluation/
-    └── sessions/
+    │   └── evidence.json
+│   └── sessions/
+└── generation-0002-failed-0001/
+    └── failure.json
 ```
 
 各文件含义：
 
 - `config.json`：本次演化实验的固定配置；
 - `state.json`：当前代数、当前提交和父代评分；
+- `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
 - `agent_result.json`：Meta-Agent 的完整消息与工具轨迹；
 - `changes.patch`：本代对自身源码的修改；
 - `record.json`：父子代指标、晋级决定和原因；
 - `validation.log`：Ruff、pytest 和 CLI 检查输出；
 - `evaluation/`：该版本的 HumanEval 候选代码、session 和结果。
+- `evaluation/evidence.json`：由评测结果、候选代码和工具轨迹整理出的结构化证据。
+- `generation-XXXX-failed-XXXX/`：模型请求、诊断或执行异常时保留的未完成代。
 
 即使某一代被拒绝，`changes.patch` 仍会保留，保证每次自身修改都可以审计和复现。
+异常中断的代不会推进 `state.json`。再次使用 `--resume` 时，未完成目录会先归档为
+`generation-XXXX-failed-XXXX`，然后从同一父代重新执行；包含 `record.json` 的完成目录不会
+被自动覆盖。
+
+## 结构化评测证据
+
+HumanEval 完成后，`HumanEvalEvidenceCollector` 会关联以下文件：
+
+```text
+summary.json
+results.jsonl
+generations.jsonl
+candidates/
+sessions/
+```
+
+它为每道题记录任务状态、停止原因、步骤、Token、工具序列、Shell 命令，以及
+`solution.py` 是否曾创建、删除和最终保留。收集器只记录可观察事实，不负责判断问题属于
+模型、上下文、工具还是架构层；分层归因由后续 Diagnosis 阶段完成。
+
+已有 HumanEval 结果可以离线生成证据，无需再次调用模型：
+
+```bash
+python -m strataevo.evolution.evidence \
+  eval/outputs/humaneval/qwen3-coder-30b-agent
+```
+
+默认输出到原评测目录的 `evidence.json`。
+
+## 四层诊断
+
+每一代修改源码前，`EvidenceDiagnoser` 会将异常任务和高成本任务压缩为诊断上下文，要求
+模型在以下四层中选择主要演化对象：
+
+```text
+model         模型本身或推理配置形成的稳定能力限制
+context       Prompt、历史选择、memory、压缩和信息呈现
+tools         工具 schema、描述、实现、skills 和结果表示
+architecture  Agent loop、停止、验证、恢复、状态和编排
+```
+
+诊断结果保存为 `diagnosis.json`，每项问题都包含可核验的任务 ID 和观察事实。模型层不能
+仅以“更强模型表现更好”为依据。自修改执行器必须沿诊断方向修改，并先读取引用的轨迹验证
+假设。当前阶段 Diagnosis 负责确定方向；后续 Layer Registry 会进一步强制各层的文件权限。
+如果模型第一次没有返回合法 schema，诊断器会把校验错误反馈给模型并默认修复重试一次；
+所有原始尝试及累计 Token 都保存在 `diagnosis.json`。
+
+已有 HumanEval 证据可以单独诊断：
+
+```bash
+python -m strataevo.evolution.diagnosis \
+  eval/outputs/humaneval/qwen3-coder-30b-agent
+```
+
+该命令会调用配置的模型，并默认写入评测目录下的 `diagnosis.json`。
 
 ## 评测数据边界
 

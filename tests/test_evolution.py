@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from strataevo.evolution.cli import _promotion_decision, run_one_generation
+from strataevo.evolution.cli import _prepare_generation_dir, _promotion_decision, run_one_generation
+from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from strataevo.evolution.workspace import SelfWorkspace
@@ -69,6 +70,19 @@ class EvolutionTests(unittest.TestCase):
         self.assertFalse(_promotion_decision(parent, worse_score, config)[0])
         self.assertFalse(_promotion_decision(parent, equal, config)[0])
 
+    def test_incomplete_generation_is_archived_before_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            generation = Path(directory) / "generation-0001"
+            generation.mkdir()
+            (generation / "failure.json").write_text('{"error":"invalid JSON"}\n', encoding="utf-8")
+
+            _prepare_generation_dir(generation)
+
+            archive = Path(directory) / "generation-0001-failed-0001"
+            self.assertTrue((archive / "failure.json").is_file())
+            self.assertTrue(generation.is_dir())
+            self.assertEqual(list(generation.iterdir()), [])
+
     def test_one_generation_commits_an_improved_self_revision(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -108,7 +122,29 @@ class EvolutionTests(unittest.TestCase):
                 def evaluate(self, _output_dir):
                     return next(reports)
 
-            def fake_mutate(_repo, _config, _generation, _report, _directory, _commands):
+            diagnosis = DiagnosisReport(
+                source_dir="parent",
+                input_case_count=1,
+                diagnoses=[
+                    Diagnosis(
+                        primary_layer=EvolutionLayer.ARCHITECTURE,
+                        related_layers=[],
+                        problem="test problem",
+                        evidence=["test evidence"],
+                        affected_tasks=["test/1"],
+                        proposed_direction="test direction",
+                        confidence=1.0,
+                    )
+                ],
+                input_tokens=0,
+                output_tokens=0,
+                raw_output="{}",
+                attempts=["{}"],
+            )
+
+            def fake_mutate(
+                _repo, _config, _generation, _report, _diagnosis, _directory, _commands
+            ):
                 agent_file.write_text("VERSION = 1\n", encoding="utf-8")
                 return AgentResult(
                     "updated", [Message("assistant", "updated")], Usage(), 1, "completed"
@@ -116,6 +152,7 @@ class EvolutionTests(unittest.TestCase):
 
             with (
                 patch("strataevo.evolution.cli.HumanEvalEvaluator", FakeEvaluator),
+                patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
                 patch("strataevo.evolution.cli.validation_commands", return_value=[]),
                 patch("strataevo.evolution.cli.mutate", side_effect=fake_mutate),
             ):
@@ -125,9 +162,89 @@ class EvolutionTests(unittest.TestCase):
                 (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
             )
             self.assertEqual(record["decision"], "accepted")
+            self.assertEqual(record["diagnosed_layers"], ["architecture"])
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
             commit_subject = self._git_output(root, "log", "-1", "--pretty=%s")
             self.assertIn("evolve: generation 1", commit_subject)
+
+    def test_failed_diagnosis_can_resume_same_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            (source / "agent.py").write_text("VERSION = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "evo")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            commit = self._git_output(root, "rev-parse", "HEAD").strip()
+
+            run_dir = root / "evolution/runs/test"
+            run_dir.mkdir(parents=True)
+            config = EvolutionConfig(repo=str(root), run_name="test", branch="evo")
+            (run_dir / "config.json").write_text(json.dumps(config.to_dict()), encoding="utf-8")
+            report = EvaluationReport(0.5, 0.49, {}, "parent", "parent.log")
+            (run_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "next_generation": 1,
+                        "current_commit": commit,
+                        "current_report": report.to_dict(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch(
+                    "strataevo.evolution.cli.diagnose_evaluation",
+                    side_effect=ValueError("invalid diagnosis JSON"),
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid diagnosis JSON"):
+                    run_one_generation(run_dir / "config.json")
+
+            failure = run_dir / "generation-0001/failure.json"
+            self.assertTrue(failure.is_file())
+
+            diagnosis = DiagnosisReport(
+                source_dir="parent",
+                input_case_count=1,
+                diagnoses=[
+                    Diagnosis(
+                        primary_layer=EvolutionLayer.ARCHITECTURE,
+                        related_layers=[],
+                        problem="test problem",
+                        evidence=["test evidence"],
+                        affected_tasks=["test/1"],
+                        proposed_direction="test direction",
+                        confidence=1.0,
+                    )
+                ],
+                input_tokens=0,
+                output_tokens=0,
+                raw_output="{}",
+                attempts=["{}"],
+            )
+            agent_result = AgentResult(
+                "no change", [Message("assistant", "no change")], Usage(), 1, "completed"
+            )
+            with (
+                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.cli.mutate", return_value=agent_result),
+            ):
+                self.assertEqual(run_one_generation(run_dir / "config.json"), 0)
+
+            archived = run_dir / "generation-0001-failed-0001/failure.json"
+            self.assertTrue(archived.is_file())
+            record = json.loads(
+                (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["decision"], "rejected")
 
     @staticmethod
     def _git(root: Path, *arguments: str) -> None:

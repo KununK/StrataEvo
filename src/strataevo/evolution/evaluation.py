@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .evidence import HumanEvalEvidenceCollector
 from .types import EvaluationReport, EvolutionConfig
 
 
@@ -87,6 +88,7 @@ class HumanEvalEvaluator:
         if not passed or not summary_path.is_file():
             raise RuntimeError(f"HumanEval failed; see {log_path}\n{output[-2000:]}")
         metrics = json.loads(summary_path.read_text(encoding="utf-8"))
+        evidence = HumanEvalEvidenceCollector().collect_and_write(output_dir)
         evaluated = max(int(metrics.get("evaluated", 0)), 1)
         average_tokens = (
             metrics.get("total_input_tokens", 0) + metrics.get("total_output_tokens", 0)
@@ -99,6 +101,8 @@ class HumanEvalEvaluator:
         )
         metrics["average_tokens"] = average_tokens
         metrics["utility"] = utility
+        metrics["evidence_path"] = str(output_dir / "evidence.json")
+        metrics["evidence_signal_counts"] = evidence.signal_counts
         print(
             f"[evolution] pass@1={task_score:.4f} utility={utility:.6f}",
             flush=True,
