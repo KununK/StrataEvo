@@ -1,0 +1,324 @@
+"""CLI and generation worker for repository-level recursive self-evolution."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from .evaluation import HumanEvalEvaluator, run_commands, validation_commands
+from .git import GitRepository
+from .mutator import mutate
+from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Let StrataEvo evaluate, rewrite, and version its own agent implementation"
+    )
+    parser.add_argument("--repo", default=".")
+    parser.add_argument("--run-name")
+    parser.add_argument("--branch", default="evo")
+    parser.add_argument("--generations", type=int, default=1)
+    parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
+    parser.add_argument("--base-url", default="http://localhost:8000/v1")
+    parser.add_argument("--mutator-max-steps", type=int, default=20)
+    parser.add_argument("--eval-limit", type=int, default=5)
+    parser.add_argument("--eval-offset", type=int, default=0)
+    parser.add_argument("--eval-workers", type=int, default=4)
+    parser.add_argument("--benchmark-max-steps", type=int, default=8)
+    parser.add_argument("--step-penalty", type=float, default=0.001)
+    parser.add_argument("--token-penalty", type=float, default=0.0000001)
+    parser.add_argument("--min-utility-delta", type=float, default=0.0)
+    parser.add_argument("--max-score-drop", type=float, default=0.0)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--worker-config", help=argparse.SUPPRESS)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.worker_config:
+        return run_one_generation(Path(args.worker_config))
+    _validate_args(args)
+    repo = Path(args.repo).resolve()
+    run_name = args.run_name or datetime.now(UTC).strftime("run-%Y%m%d-%H%M%S")
+    run_dir = repo / "evolution" / "runs" / run_name
+    config_path = run_dir / "config.json"
+
+    git = GitRepository(repo, DEFAULT_MUTABLE_PATHS)
+    git.ensure_clean()
+    git.ensure_branch(args.branch)
+
+    if config_path.exists():
+        if not args.resume:
+            raise RuntimeError(f"run already exists; use --resume: {run_dir}")
+        config = EvolutionConfig.from_dict(_read_json(config_path))
+    else:
+        run_dir.mkdir(parents=True, exist_ok=False)
+        config = EvolutionConfig(
+            repo=str(repo),
+            run_name=run_name,
+            branch=args.branch,
+            generations=args.generations,
+            model=args.model,
+            base_url=args.base_url,
+            mutator_max_steps=args.mutator_max_steps,
+            eval_limit=args.eval_limit,
+            eval_offset=args.eval_offset,
+            eval_workers=args.eval_workers,
+            benchmark_max_steps=args.benchmark_max_steps,
+            step_penalty=args.step_penalty,
+            token_penalty=args.token_penalty,
+            min_utility_delta=args.min_utility_delta,
+            max_score_drop=args.max_score_drop,
+        )
+        _write_json(config_path, config.to_dict())
+
+    for _ in range(args.generations):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "strataevo.evolution.cli",
+                "--worker-config",
+                str(config_path),
+            ],
+            cwd=repo,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return completed.returncode
+    return 0
+
+
+def run_one_generation(config_path: Path) -> int:
+    config = EvolutionConfig.from_dict(_read_json(config_path))
+    repo = Path(config.repo).resolve()
+    run_dir = config_path.parent
+    state_path = run_dir / "state.json"
+    git = GitRepository(repo, config.mutable_paths)
+    git.ensure_clean()
+    current_branch = _git_output(repo, ["branch", "--show-current"]).strip()
+    if current_branch != config.branch:
+        raise RuntimeError(f"expected branch {config.branch!r}, found {current_branch!r}")
+
+    evaluator = HumanEvalEvaluator(repo, config)
+    commands = validation_commands(repo)
+    state = _load_or_create_state(state_path, git, evaluator, run_dir)
+    generation = int(state["next_generation"])
+    generation_dir = run_dir / f"generation-{generation:04d}"
+    generation_dir.mkdir(parents=True, exist_ok=False)
+    parent_commit = git.head()
+    parent_report = EvaluationReport.from_dict(state["current_report"])
+
+    try:
+        agent_result = mutate(
+            repo,
+            config,
+            generation,
+            parent_report,
+            generation_dir,
+            commands,
+        )
+        _write_json(
+            generation_dir / "agent_result.json",
+            {
+                "output": agent_result.output,
+                "messages": [message.to_dict() for message in agent_result.messages],
+                "usage": {
+                    "input_tokens": agent_result.usage.input_tokens,
+                    "output_tokens": agent_result.usage.output_tokens,
+                },
+                "steps": agent_result.steps,
+                "stop_reason": agent_result.stop_reason,
+            },
+        )
+        changed_paths = git.changed_paths()
+        if not changed_paths:
+            record = _record(
+                generation,
+                parent_commit,
+                None,
+                "rejected",
+                "meta-agent produced no source changes",
+                [],
+                None,
+                parent_report,
+                None,
+                agent_result,
+            )
+            _finish_generation(state_path, state, generation_dir, record)
+            return 0
+
+        git.stage()
+        patch_path = generation_dir / "changes.patch"
+        patch_path.write_text(git.staged_diff(), encoding="utf-8")
+        gates_passed, _ = run_commands(
+            commands, repo, generation_dir / "validation.log", timeout=600
+        )
+        if not gates_passed:
+            git.rollback()
+            record = _record(
+                generation,
+                parent_commit,
+                None,
+                "rejected",
+                "fixed validation commands failed",
+                changed_paths,
+                patch_path,
+                parent_report,
+                None,
+                agent_result,
+            )
+            _finish_generation(state_path, state, generation_dir, record)
+            return 0
+
+        candidate_report = evaluator.evaluate(generation_dir / "evaluation")
+        accepted, reason = _promotion_decision(parent_report, candidate_report, config)
+        if accepted:
+            resulting_commit = git.commit(
+                f"evolve: generation {generation} utility {candidate_report.utility:.6f}"
+            )
+            state["current_commit"] = resulting_commit
+            state["current_report"] = candidate_report.to_dict()
+            decision = "accepted"
+        else:
+            git.rollback()
+            resulting_commit = None
+            decision = "rejected"
+        record = _record(
+            generation,
+            parent_commit,
+            resulting_commit,
+            decision,
+            reason,
+            changed_paths,
+            patch_path,
+            parent_report,
+            candidate_report,
+            agent_result,
+        )
+        _finish_generation(state_path, state, generation_dir, record)
+        print(
+            f"generation={generation} decision={decision} "
+            f"score={candidate_report.task_score:.4f} utility={candidate_report.utility:.6f}"
+        )
+        return 0
+    except Exception:
+        if git.changed_paths():
+            git.rollback()
+        raise
+
+
+def _load_or_create_state(
+    path: Path,
+    git: GitRepository,
+    evaluator: HumanEvalEvaluator,
+    run_dir: Path,
+) -> dict[str, Any]:
+    if path.exists():
+        state = _read_json(path)
+        if state["current_commit"] != git.head():
+            raise RuntimeError("evolution state does not match the current Git revision")
+        return state
+    report = evaluator.evaluate(run_dir / "baseline" / "evaluation")
+    state = {
+        "next_generation": 1,
+        "current_commit": git.head(),
+        "current_report": report.to_dict(),
+    }
+    _write_json(path, state)
+    return state
+
+
+def _promotion_decision(
+    parent: EvaluationReport,
+    candidate: EvaluationReport,
+    config: EvolutionConfig,
+) -> tuple[bool, str]:
+    score_floor = parent.task_score - config.max_score_drop
+    if candidate.task_score < score_floor:
+        return False, f"task score dropped below {score_floor:.6f}"
+    required = parent.utility + config.min_utility_delta
+    if candidate.utility <= required:
+        return False, f"utility {candidate.utility:.6f} did not exceed {required:.6f}"
+    return True, "task score satisfied the floor and utility improved"
+
+
+def _record(
+    generation: int,
+    parent_commit: str,
+    resulting_commit: str | None,
+    decision: str,
+    reason: str,
+    changed_paths: list[str],
+    patch_path: Path | None,
+    parent_report: EvaluationReport,
+    candidate_report: EvaluationReport | None,
+    agent_result: Any,
+) -> GenerationRecord:
+    return GenerationRecord(
+        generation=generation,
+        parent_commit=parent_commit,
+        resulting_commit=resulting_commit,
+        decision=decision,
+        reason=reason,
+        changed_paths=changed_paths,
+        patch_path=str(patch_path) if patch_path else None,
+        parent_report=parent_report.to_dict(),
+        candidate_report=candidate_report.to_dict() if candidate_report else None,
+        agent_stop_reason=agent_result.stop_reason,
+        agent_steps=agent_result.steps,
+        input_tokens=agent_result.usage.input_tokens,
+        output_tokens=agent_result.usage.output_tokens,
+    )
+
+
+def _finish_generation(
+    state_path: Path,
+    state: dict[str, Any],
+    generation_dir: Path,
+    record: GenerationRecord,
+) -> None:
+    _write_json(generation_dir / "record.json", record.to_dict())
+    state["next_generation"] = record.generation + 1
+    _write_json(state_path, state)
+
+
+def _validate_args(args: argparse.Namespace) -> None:
+    positive = {
+        "generations": args.generations,
+        "mutator-max-steps": args.mutator_max_steps,
+        "eval-limit": args.eval_limit,
+        "eval-workers": args.eval_workers,
+        "benchmark-max-steps": args.benchmark_max_steps,
+    }
+    for name, value in positive.items():
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+    if args.eval_offset < 0 or args.max_score_drop < 0:
+        raise ValueError("eval-offset and max-score-drop must be non-negative")
+
+
+def _git_output(repo: Path, arguments: list[str]) -> str:
+    return subprocess.check_output(["git", *arguments], cwd=repo, text=True)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -161,6 +161,19 @@ def evaluate_candidate(candidate: str, task: str) -> dict:
 
 后续自进化层可以作为新包加入 `src/strataevo/`，并通过 Tinyagent 的 `Model`、`Tool`、`SessionStore` 和 `EventBus` 接口组合，而无需修改基础 Agent 循环。
 
+## 自进化
+
+StrataEvo 现在支持代码库级递归自进化：Meta-Agent 阅读评测轨迹，修改自己的 Agent
+实现，通过固定测试和 HumanEval 重新评测后，改进版本会提交到 `evo` 分支，失败
+版本自动回滚。下一代由新的 Python 进程加载修改后的源码。
+
+```bash
+strataevo --run-name humaneval-dev --generations 1 --eval-limit 5
+```
+
+这里修改的是 Agent 自身源码，不是 HumanEval 的 `solution.py`。设计边界、晋级条件、
+断点续跑和输出结构见 [`EVOLUTION.md`](EVOLUTION.md)。
+
 ## 工具与安全边界
 
 Tinyagent 内置 `list_files`、`read_file`、`search_files`、`write_file`、`replace_text` 和 `run_shell`。

@@ -9,3 +9,4 @@ dist/
 .venv/
 eval/logs/
 eval/outputs/
+evolution/runs/

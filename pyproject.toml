@@ -33,9 +33,10 @@ dependencies = [
 
 [project.scripts]
 tinyagent = "tinyagent.cli:main"
+strataevo = "strataevo.evolution.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tinyagent"]
+packages = ["src/tinyagent", "src/strataevo"]
 
 [dependency-groups]
 dev = [
@@ -56,4 +57,4 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "src"]
