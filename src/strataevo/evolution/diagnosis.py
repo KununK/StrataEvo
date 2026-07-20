@@ -12,6 +12,7 @@ from typing import Any
 from tinyagent import Message, Model, OpenAICompatibleModel
 
 from .evidence import EvidenceBundle, HumanEvalEvidenceCollector, TaskEvidence
+from .memory import EvolutionMemoryEntry, memory_context
 from .types import EvaluationReport, EvolutionConfig
 
 
@@ -104,13 +105,18 @@ class EvidenceDiagnoser:
         self.max_cases = max_cases
         self.repair_retries = repair_retries
 
-    def diagnose(self, bundle: EvidenceBundle) -> DiagnosisReport:
+    def diagnose(
+        self,
+        bundle: EvidenceBundle,
+        history: list[EvolutionMemoryEntry] | None = None,
+    ) -> DiagnosisReport:
         cases = _select_cases(bundle.cases, self.max_cases)
         payload = {
             "evaluator": bundle.evaluator,
             "summary": bundle.summary,
             "signal_counts": bundle.signal_counts,
             "cases": [_compact_case(case) for case in cases],
+            "prior_evolution": memory_context(history or []),
         }
         messages = [
             Message("system", DIAGNOSIS_SYSTEM_PROMPT),
@@ -173,9 +179,11 @@ Layer definitions:
 - tools: tool schemas, descriptions, implementations, skills, and tool-result representations.
 - architecture: agent loop, planning, stopping, validation, recovery, state, and orchestration.
 
-Use only supplied observations. Cite task IDs and concrete events in evidence. Do not propose code
-or claim hidden causes. Prefer the layer closest to the failed mechanism rather than listing every
-layer. Return one to six diagnoses as exactly this JSON object:
+Use only supplied observations. Cite task IDs and concrete events in evidence. Prior evolution
+records are outcomes, not proof of the current cause: use them to avoid blindly repeating rejected
+hypotheses and to preserve improvements that were accepted. Do not propose code or claim hidden
+causes. Prefer the layer closest to the failed mechanism rather than listing every layer. Return one
+to six diagnoses as exactly this JSON object:
 {
   "diagnoses": [
     {
@@ -195,6 +203,7 @@ def diagnose_evaluation(
     config: EvolutionConfig,
     report: EvaluationReport,
     destination: str | Path,
+    history: list[EvolutionMemoryEntry] | None = None,
 ) -> DiagnosisReport:
     bundle = HumanEvalEvidenceCollector().collect(report.output_dir)
     model = OpenAICompatibleModel(
@@ -203,7 +212,7 @@ def diagnose_evaluation(
         temperature=0.0,
         timeout=300.0,
     )
-    diagnosis = EvidenceDiagnoser(model).diagnose(bundle)
+    diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history)
     _write_json(Path(destination), diagnosis.to_dict())
     return diagnosis
 

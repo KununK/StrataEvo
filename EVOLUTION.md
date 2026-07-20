@@ -5,11 +5,14 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
 ```text
 评测父代
   -> 收集候选代码和工具轨迹为 Evidence
+  -> 读取以往代际的 Evolution Memory
   -> Diagnosis 判断主要演化层
+  -> Evolution Plan 选择一项可检验的干预
   -> 自修改执行器修改自身源码
   -> 执行固定的代码检查和测试
   -> 评测修改后的 Agent
   -> 提交改进版本或回滚
+  -> 将接受或拒绝的结果写入 Evolution Memory
   -> 在新的 Python 进程中启动下一代
 ```
 
@@ -33,6 +36,7 @@ eval/                           评测基准和奖励信号
 tests/                          回归测试
 src/strataevo/evolution/cli.py  晋级控制器
 src/strataevo/evolution/diagnosis.py  四层诊断器
+src/strataevo/evolution/plan.py  单目标演化计划器
 src/strataevo/evolution/evidence.py  评测证据收集器
 src/strataevo/evolution/git.py  Git 提交和回滚
 ```
@@ -135,16 +139,18 @@ Python 模块加载后，修改磁盘源码不会自动改变当前进程中已�
 evolution/runs/<run_name>/
 ├── config.json
 ├── state.json
+├── evolution_memory.jsonl
 ├── baseline/
 ├── generation-0001/
-    ├── diagnosis.json
-    ├── agent_result.json
-    ├── changes.patch
-    ├── record.json
-    ├── validation.log
-    ├── evaluation.log
-    ├── evaluation/
-    │   └── evidence.json
+│   ├── diagnosis.json
+│   ├── plan.json
+│   ├── agent_result.json
+│   ├── changes.patch
+│   ├── record.json
+│   ├── validation.log
+│   ├── evaluation.log
+│   ├── evaluation/
+│   │   └── evidence.json
 │   └── sessions/
 └── generation-0002-failed-0001/
     └── failure.json
@@ -154,7 +160,9 @@ evolution/runs/<run_name>/
 
 - `config.json`：本次演化实验的固定配置；
 - `state.json`：当前代数、当前提交和父代评分；
+- `evolution_memory.jsonl`：所有已完成代的诊断、修改、指标和接受/拒绝结果；
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
+- `plan.json`：从诊断中选中的单一问题、干预、预期指标和长期价值假设；
 - `agent_result.json`：Meta-Agent 的完整消息与工具轨迹；
 - `changes.patch`：本代对自身源码的修改；
 - `record.json`：父子代指标、晋级决定和原因；
@@ -207,9 +215,9 @@ architecture  Agent loop、停止、验证、恢复、状态和编排
 
 诊断结果保存为 `diagnosis.json`，每项问题都包含可核验的任务 ID 和观察事实。模型层不能
 仅以“更强模型表现更好”为依据。自修改执行器必须沿诊断方向修改，并先读取引用的轨迹验证
-假设。当前阶段 Diagnosis 负责确定方向；后续 Layer Registry 会进一步强制各层的文件权限。
-如果模型第一次没有返回合法 schema，诊断器会把校验错误反馈给模型并默认修复重试一次；
-所有原始尝试及累计 Token 都保存在 `diagnosis.json`。
+假设。四层归因用于形成假设和审计，不对文件实施严格的分层权限；同一个模块可能同时包含
+上下文、工具和架构行为。如果模型第一次没有返回合法 schema，诊断器会把校验错误反馈给
+模型并默认修复重试一次；所有原始尝试及累计 Token 都保存在 `diagnosis.json`。
 
 已有 HumanEval 证据可以单独诊断：
 
@@ -219,6 +227,50 @@ python -m strataevo.evolution.diagnosis \
 ```
 
 该命令会调用配置的模型，并默认写入评测目录下的 `diagnosis.json`。
+
+## Evolution Plan
+
+Diagnosis 可以发现多个问题，但每代只应执行一项可归因的干预。`EvolutionPlanner` 根据
+Diagnosis、父代真实指标和历史 Memory 选择一项问题，结果保存为 `plan.json`：
+
+```text
+target_diagnosis          选中的诊断序号
+primary_layer             本次主要演化层
+hypothesis                可检验的因果假设
+intervention              一项聚焦的行为改进
+expected_outcomes         当前评测可验证的指标及方向
+likely_files              建议关注的文件，不是权限边界
+expected_long_term_value  可能支持的未来改进
+prerequisites             实现长期价值需要的前置条件
+```
+
+`expected_outcomes` 只能引用父代报告中实际存在的数值指标，例如 `task_score`、`utility`、
+`average_agent_steps` 或 `signal:artifact_missing`。候选评测后，Memory 会记录这些指标的
+父代值、候选值以及是否符合预期。Planner 首次返回无效 JSON、错误诊断序号、层级不一致或
+不存在的指标时，会收到校验错误并默认修复一次。
+
+长期价值目前只用于记录研究假设。一个修改即使可能帮助未来进化，仍必须通过当前固定测试、
+任务分数和 utility 晋级规则；本阶段不会因为推测性的长期价值接受当前无收益的候选。后续
+加入独立的进化能力评测后，可以利用这些字段重新分析“当前无用但具有未来价值”的改动。
+
+## 跨代 Evolution Memory
+
+每个完成的代都会向 `evolution_memory.jsonl` 写入一条结构化记录，包括：
+
+```text
+generation、diagnoses、plan、expected outcome observations
+changed_paths、patch path / excerpt、agent_output
+父代和候选的 task score / utility、utility delta
+accepted / rejected、原因和 resulting commit
+```
+
+Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复提出已被拒绝的假设。自修改
+执行器会优先读取与本次主要层或关联层匹配的历史，同时补充最近的其他记录。历史只作为
+经验，不作为当前根因的证明；最终仍由固定验证和真实评测决定候选是否晋级。
+
+Memory 使用代数作为唯一键并采用原子文件替换。重复写入完全相同的一代不会产生重复记录，
+内容冲突则会报错。异常中断的未完成代不写入 Memory，使用 `--resume` 时会从已有记录继续。
+Memory 位于已被 Git 忽略的运行目录中，因此不会污染源码提交，但接受和拒绝的尝试都会保留。
 
 ## 评测数据边界
 

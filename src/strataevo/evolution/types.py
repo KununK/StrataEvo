@@ -63,6 +63,9 @@ class GenerationRecord:
     patch_path: str | None
     diagnosis_path: str
     diagnosed_layers: list[str]
+    plan_path: str
+    planned_layer: str
+    plan_hypothesis: str
     parent_report: dict[str, Any]
     candidate_report: dict[str, Any] | None
     agent_stop_reason: str

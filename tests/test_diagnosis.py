@@ -3,6 +3,7 @@ import unittest
 
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence
+from strataevo.evolution.memory import EvolutionMemoryEntry, MemoryDiagnosis
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 
 
@@ -30,7 +31,38 @@ class DiagnosisTests(unittest.TestCase):
             ]
         )
 
-        report = EvidenceDiagnoser(model).diagnose(self._bundle())
+        history = [
+            EvolutionMemoryEntry(
+                generation=1,
+                parent_commit="parent",
+                resulting_commit=None,
+                decision="rejected",
+                reason="utility did not improve",
+                diagnoses=[
+                    MemoryDiagnosis(
+                        primary_layer="tools",
+                        related_layers=[],
+                        problem="A previous tool hypothesis failed.",
+                        affected_tasks=["HumanEval/25"],
+                        proposed_direction="Change the tool description.",
+                        confidence=0.7,
+                    )
+                ],
+                plan={},
+                outcome_observations=[],
+                changed_paths=["src/tinyagent/workspace.py"],
+                patch_path="generation-0001/changes.patch",
+                patch_excerpt="- vague description\n+ precise description",
+                agent_output="Changed the tool description.",
+                parent_task_score=0.0,
+                parent_utility=-0.01,
+                candidate_task_score=0.0,
+                candidate_utility=-0.02,
+                utility_delta=-0.01,
+            )
+        ]
+
+        report = EvidenceDiagnoser(model).diagnose(self._bundle(), history)
 
         diagnosis = report.diagnoses[0]
         self.assertEqual(diagnosis.primary_layer, EvolutionLayer.ARCHITECTURE)
@@ -40,6 +72,8 @@ class DiagnosisTests(unittest.TestCase):
         request = model.requests[0][1].content
         self.assertIn("HumanEval/25", request)
         self.assertIn("rm -f solution.py", request)
+        self.assertIn('"prior_evolution"', request)
+        self.assertIn("utility did not improve", request)
 
     def test_unknown_layer_is_rejected(self):
         response = {

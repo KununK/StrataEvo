@@ -15,6 +15,8 @@ from tinyagent import (
 )
 
 from .diagnosis import DiagnosisReport
+from .memory import EvolutionMemoryEntry, memory_context
+from .plan import EvolutionPlanReport
 from .types import EvaluationReport, EvolutionConfig
 from .workspace import SelfWorkspace
 
@@ -33,6 +35,8 @@ def mutate(
     generation: int,
     parent_report: EvaluationReport,
     diagnosis: DiagnosisReport,
+    plan_report: EvolutionPlanReport,
+    history: list[EvolutionMemoryEntry],
     generation_dir: Path,
     commands: list[list[str]],
 ) -> AgentResult:
@@ -53,9 +57,10 @@ def mutate(
         session_store=SessionStore(generation_dir / "sessions"),
     )
     feedback = json.dumps(parent_report.to_dict(), indent=2, ensure_ascii=False)
-    diagnosed_problems = json.dumps(
-        [item.to_dict() for item in diagnosis.diagnoses], indent=2, ensure_ascii=False
-    )
+    selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
+    diagnosed_problem = json.dumps(selected_diagnosis.to_dict(), indent=2, ensure_ascii=False)
+    evolution_plan = json.dumps(plan_report.plan.to_dict(), indent=2, ensure_ascii=False)
+    prior_evolution = json.dumps(memory_context(history), indent=2, ensure_ascii=False)
     prompt = f"""Create generation {generation} by improving your own implementation.
 
 Current evaluation report:
@@ -64,13 +69,20 @@ Current evaluation report:
 Detailed trajectories and results are stored under:
 {parent_report.output_dir}
 
-Structured diagnosis:
-{diagnosed_problems}
+Selected diagnosis:
+{diagnosed_problem}
 
-Read the relevant implementation and evidence before editing. Make a focused change that is
-consistent with the diagnosed primary layer and is expected to improve task score or reduce
-steps/tokens without reducing task score. Treat the diagnosis as a testable hypothesis, verify
-its evidence against the referenced trajectories, and do not silently switch to an unrelated
-problem. Run the fixed validation command after editing. Your changes remain on disk for the
-external evolution controller to evaluate and either commit or roll back."""
+Evolution plan:
+{evolution_plan}
+
+Relevant prior evolution outcomes:
+{prior_evolution}
+
+Read the relevant implementation and evidence before editing. Execute one focused intervention
+consistent with the plan. Treat the hypothesis as testable, verify its evidence against the
+referenced trajectories, and use prior outcomes to avoid repeating an unchanged rejected approach.
+likely_files are guidance rather than a permission boundary. Do not silently switch to another
+diagnosis or bundle unrelated improvements. Run the fixed validation command after editing. Your
+changes remain on disk for the external evolution controller to evaluate and either commit or roll
+back."""
     return agent.run(prompt, session_id=f"generation-{generation}")

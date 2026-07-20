@@ -8,6 +8,12 @@ from unittest.mock import patch
 from strataevo.evolution.cli import _prepare_generation_dir, _promotion_decision, run_one_generation
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
+from strataevo.evolution.plan import (
+    EvolutionPlan,
+    EvolutionPlanReport,
+    ExpectedOutcome,
+    MetricDirection,
+)
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from strataevo.evolution.workspace import SelfWorkspace
 from tinyagent import AgentResult, Message, Usage
@@ -141,9 +147,18 @@ class EvolutionTests(unittest.TestCase):
                 raw_output="{}",
                 attempts=["{}"],
             )
+            plan = self._plan_report()
 
             def fake_mutate(
-                _repo, _config, _generation, _report, _diagnosis, _directory, _commands
+                _repo,
+                _config,
+                _generation,
+                _report,
+                _diagnosis,
+                _plan,
+                _history,
+                _directory,
+                _commands,
             ):
                 agent_file.write_text("VERSION = 1\n", encoding="utf-8")
                 return AgentResult(
@@ -153,6 +168,7 @@ class EvolutionTests(unittest.TestCase):
             with (
                 patch("strataevo.evolution.cli.HumanEvalEvaluator", FakeEvaluator),
                 patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
                 patch("strataevo.evolution.cli.validation_commands", return_value=[]),
                 patch("strataevo.evolution.cli.mutate", side_effect=fake_mutate),
             ):
@@ -163,6 +179,15 @@ class EvolutionTests(unittest.TestCase):
             )
             self.assertEqual(record["decision"], "accepted")
             self.assertEqual(record["diagnosed_layers"], ["architecture"])
+            self.assertEqual(record["planned_layer"], "architecture")
+            memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
+            self.assertEqual(len(memory), 1)
+            self.assertEqual(memory[0]["generation"], 1)
+            self.assertEqual(memory[0]["decision"], "accepted")
+            self.assertAlmostEqual(memory[0]["utility_delta"], 0.005)
+            self.assertTrue(memory[0]["patch_path"].endswith("changes.patch"))
+            self.assertIn("VERSION = 1", memory[0]["patch_excerpt"])
+            self.assertTrue(memory[0]["outcome_observations"][0]["satisfied"])
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
             commit_subject = self._git_output(root, "log", "-1", "--pretty=%s")
             self.assertIn("evolve: generation 1", commit_subject)
@@ -232,9 +257,11 @@ class EvolutionTests(unittest.TestCase):
             agent_result = AgentResult(
                 "no change", [Message("assistant", "no change")], Usage(), 1, "completed"
             )
+            plan = self._plan_report()
             with (
                 patch("strataevo.evolution.cli.validation_commands", return_value=[]),
                 patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
                 patch("strataevo.evolution.cli.mutate", return_value=agent_result),
             ):
                 self.assertEqual(run_one_generation(run_dir / "config.json"), 0)
@@ -245,6 +272,10 @@ class EvolutionTests(unittest.TestCase):
                 (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
             )
             self.assertEqual(record["decision"], "rejected")
+            memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
+            self.assertEqual(len(memory), 1)
+            self.assertEqual(memory[0]["decision"], "rejected")
+            self.assertIsNone(memory[0]["candidate_utility"])
 
     @staticmethod
     def _git(root: Path, *arguments: str) -> None:
@@ -259,6 +290,37 @@ class EvolutionTests(unittest.TestCase):
     @staticmethod
     def _git_output(root: Path, *arguments: str) -> str:
         return subprocess.check_output(["git", *arguments], cwd=root, text=True)
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict]:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _plan_report() -> EvolutionPlanReport:
+        return EvolutionPlanReport(
+            plan=EvolutionPlan(
+                target_diagnosis=0,
+                primary_layer=EvolutionLayer.ARCHITECTURE,
+                hypothesis="test hypothesis",
+                intervention="test intervention",
+                expected_outcomes=[
+                    ExpectedOutcome(
+                        metric="task_score",
+                        direction=MetricDirection.NON_DECREASING,
+                        reason="preserve task quality",
+                    )
+                ],
+                likely_files=["src/tinyagent/agent.py"],
+                expected_long_term_value="improve later agent control flow",
+                prerequisites=[],
+                confidence=0.8,
+            ),
+            available_metrics={"task_score": 0.5, "utility": 0.49},
+            input_tokens=0,
+            output_tokens=0,
+            raw_output="{}",
+            attempts=["{}"],
+        )
 
 
 if __name__ == "__main__":

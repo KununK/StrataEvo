@@ -13,7 +13,9 @@ from typing import Any
 from .diagnosis import DiagnosisReport, diagnose_evaluation
 from .evaluation import HumanEvalEvaluator, run_commands, validation_commands
 from .git import GitRepository
+from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .mutator import mutate
+from .plan import EvolutionPlanReport, plan_evolution
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
 
 
@@ -102,6 +104,7 @@ def run_one_generation(config_path: Path) -> int:
     repo = Path(config.repo).resolve()
     run_dir = config_path.parent
     state_path = run_dir / "state.json"
+    memory = EvolutionMemory(run_dir / "evolution_memory.jsonl")
     git = GitRepository(repo, config.mutable_paths)
     git.ensure_clean()
     current_branch = _git_output(repo, ["branch", "--show-current"]).strip()
@@ -117,15 +120,37 @@ def run_one_generation(config_path: Path) -> int:
     parent_commit = git.head()
     parent_report = EvaluationReport.from_dict(state["current_report"])
     diagnosis_path = generation_dir / "diagnosis.json"
+    plan_path = generation_dir / "plan.json"
 
     try:
-        diagnosis = diagnose_evaluation(config, parent_report, diagnosis_path)
+        diagnosis = diagnose_evaluation(config, parent_report, diagnosis_path, memory.latest())
+        diagnosed_layers = {
+            layer.value
+            for item in diagnosis.diagnoses
+            for layer in [item.primary_layer, *item.related_layers]
+        }
+        planning_history = memory.relevant(diagnosed_layers)
+        plan_report = plan_evolution(
+            config,
+            diagnosis,
+            parent_report,
+            planning_history,
+            plan_path,
+        )
+        selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
+        mutation_layers = {
+            selected_diagnosis.primary_layer.value,
+            *(layer.value for layer in selected_diagnosis.related_layers),
+        }
+        mutation_history = memory.relevant(mutation_layers)
         agent_result = mutate(
             repo,
             config,
             generation,
             parent_report,
             diagnosis,
+            plan_report,
+            mutation_history,
             generation_dir,
             commands,
         )
@@ -154,11 +179,22 @@ def run_one_generation(config_path: Path) -> int:
                 None,
                 diagnosis_path,
                 diagnosis,
+                plan_path,
+                plan_report,
                 parent_report,
                 None,
                 agent_result,
             )
-            _finish_generation(state_path, state, generation_dir, record)
+            _finish_generation(
+                state_path,
+                state,
+                generation_dir,
+                record,
+                memory,
+                diagnosis,
+                plan_report,
+                agent_result,
+            )
             return 0
 
         git.stage()
@@ -179,11 +215,22 @@ def run_one_generation(config_path: Path) -> int:
                 patch_path,
                 diagnosis_path,
                 diagnosis,
+                plan_path,
+                plan_report,
                 parent_report,
                 None,
                 agent_result,
             )
-            _finish_generation(state_path, state, generation_dir, record)
+            _finish_generation(
+                state_path,
+                state,
+                generation_dir,
+                record,
+                memory,
+                diagnosis,
+                plan_report,
+                agent_result,
+            )
             return 0
 
         candidate_report = evaluator.evaluate(generation_dir / "evaluation")
@@ -209,11 +256,22 @@ def run_one_generation(config_path: Path) -> int:
             patch_path,
             diagnosis_path,
             diagnosis,
+            plan_path,
+            plan_report,
             parent_report,
             candidate_report,
             agent_result,
         )
-        _finish_generation(state_path, state, generation_dir, record)
+        _finish_generation(
+            state_path,
+            state,
+            generation_dir,
+            record,
+            memory,
+            diagnosis,
+            plan_report,
+            agent_result,
+        )
         print(
             f"generation={generation} decision={decision} "
             f"score={candidate_report.task_score:.4f} utility={candidate_report.utility:.6f}"
@@ -274,6 +332,8 @@ def _record(
     patch_path: Path | None,
     diagnosis_path: Path,
     diagnosis: DiagnosisReport,
+    plan_path: Path,
+    plan_report: EvolutionPlanReport,
     parent_report: EvaluationReport,
     candidate_report: EvaluationReport | None,
     agent_result: Any,
@@ -290,6 +350,9 @@ def _record(
         diagnosed_layers=list(
             dict.fromkeys(item.primary_layer.value for item in diagnosis.diagnoses)
         ),
+        plan_path=str(plan_path),
+        planned_layer=plan_report.plan.primary_layer.value,
+        plan_hypothesis=plan_report.plan.hypothesis,
         parent_report=parent_report.to_dict(),
         candidate_report=candidate_report.to_dict() if candidate_report else None,
         agent_stop_reason=agent_result.stop_reason,
@@ -304,8 +367,15 @@ def _finish_generation(
     state: dict[str, Any],
     generation_dir: Path,
     record: GenerationRecord,
+    memory: EvolutionMemory,
+    diagnosis: DiagnosisReport,
+    plan_report: EvolutionPlanReport,
+    agent_result: Any,
 ) -> None:
     _write_json(generation_dir / "record.json", record.to_dict())
+    memory.append(
+        EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_result.output)
+    )
     state["next_generation"] = record.generation + 1
     _write_json(state_path, state)
 
