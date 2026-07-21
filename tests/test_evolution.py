@@ -85,16 +85,15 @@ class EvolutionTests(unittest.TestCase):
             self.assertFalse(added.exists())
             repository.ensure_clean()
 
-    def test_promotion_requires_preserved_score_and_higher_utility(self):
-        config = EvolutionConfig(repo=".", run_name="test")
+    def test_promotion_requires_strictly_higher_task_score(self):
         parent = EvaluationReport(0.8, 0.79, {}, "parent", "parent.log")
-        better = EvaluationReport(0.8, 0.795, {}, "candidate", "candidate.log")
-        worse_score = EvaluationReport(0.7, 0.8, {}, "candidate", "candidate.log")
-        equal = EvaluationReport(0.8, 0.79, {}, "candidate", "candidate.log")
+        better_score = EvaluationReport(0.9, 0.70, {}, "candidate", "candidate.log")
+        worse_score = EvaluationReport(0.7, 0.90, {}, "candidate", "candidate.log")
+        equal_score = EvaluationReport(0.8, 0.90, {}, "candidate", "candidate.log")
 
-        self.assertTrue(_promotion_decision(parent, better, config)[0])
-        self.assertFalse(_promotion_decision(parent, worse_score, config)[0])
-        self.assertFalse(_promotion_decision(parent, equal, config)[0])
+        self.assertTrue(_promotion_decision(parent, better_score)[0])
+        self.assertFalse(_promotion_decision(parent, worse_score)[0])
+        self.assertFalse(_promotion_decision(parent, equal_score)[0])
 
     def test_incomplete_generation_is_archived_before_retry(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -137,7 +136,7 @@ class EvolutionTests(unittest.TestCase):
             reports = iter(
                 [
                     EvaluationReport(0.5, 0.49, {}, "parent", "parent.log"),
-                    EvaluationReport(0.5, 0.495, {}, "child", "child.log"),
+                    EvaluationReport(0.6, 0.495, {}, "child", "child.log"),
                 ]
             )
 
@@ -210,8 +209,8 @@ class EvolutionTests(unittest.TestCase):
             self.assertIn("VERSION = 1", memory[0]["patch_excerpt"])
             self.assertTrue(memory[0]["outcome_observations"][0]["satisfied"])
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
-            commit_subject = self._git_output(root, "log", "-1", "--pretty=%s")
-            self.assertIn("evolve: generation 1", commit_subject)
+            commit_subject = self._git_output(root, "log", "-1", "--pretty=%s").strip()
+            self.assertEqual(commit_subject, "evolve: generation 1 pass@1 0.600000")
 
     def test_failed_diagnosis_can_resume_same_generation(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -238,10 +238,10 @@ def run_one_generation(config_path: Path) -> int:
             return 0
 
         candidate_report = evaluator.evaluate(generation_dir / "evaluation")
-        accepted, reason = _promotion_decision(parent_report, candidate_report, config)
+        accepted, reason = _promotion_decision(parent_report, candidate_report)
         if accepted:
             resulting_commit = git.commit(
-                f"evolve: generation {generation} utility {candidate_report.utility:.6f}"
+                f"evolve: generation {generation} pass@1 {candidate_report.task_score:.6f}"
             )
             state["current_commit"] = resulting_commit
             state["current_report"] = candidate_report.to_dict()
@@ -313,15 +313,13 @@ def _load_or_create_state(
 def _promotion_decision(
     parent: EvaluationReport,
     candidate: EvaluationReport,
-    config: EvolutionConfig,
 ) -> tuple[bool, str]:
-    score_floor = parent.task_score - config.max_score_drop
-    if candidate.task_score < score_floor:
-        return False, f"task score dropped below {score_floor:.6f}"
-    required = parent.utility + config.min_utility_delta
-    if candidate.utility <= required:
-        return False, f"utility {candidate.utility:.6f} did not exceed {required:.6f}"
-    return True, "task score satisfied the floor and utility improved"
+    if candidate.task_score <= parent.task_score:
+        return False, (
+            f"pass@1 {candidate.task_score:.6f} did not exceed "
+            f"parent {parent.task_score:.6f}"
+        )
+    return True, "pass@1 strictly improved"
 
 
 def _record(
