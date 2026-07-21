@@ -27,7 +27,7 @@ class Agent:
     approval: Approval | None = None
     events: EventBus = field(default_factory=EventBus)
     session_store: SessionStore | None = None
-    context_limit_chars: int = 100_000
+    context_limit_chars: int = 60_000
     _cancelled: threading.Event = field(default_factory=threading.Event, init=False)
 
     def __post_init__(self) -> None:
