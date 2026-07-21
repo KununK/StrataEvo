@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from tinyagent import (
@@ -41,9 +42,15 @@ def mutate(
     history: list[EvolutionMemoryEntry],
     generation_dir: Path,
     commands: list[list[str]],
+    evaluate_candidate: Callable[[], str],
 ) -> AgentResult:
     print(f"[evolution] generation {generation}: inspecting and rewriting self", flush=True)
-    workspace = SelfWorkspace(repo, config.mutable_paths, commands)
+    workspace = SelfWorkspace(
+        repo,
+        config.mutable_paths,
+        commands,
+        candidate_evaluator=evaluate_candidate,
+    )
     model = OpenAICompatibleModel(
         model=config.model,
         base_url=config.base_url,
@@ -85,8 +92,12 @@ Relevant prior evolution outcomes:
 Execution constraints:
 - Writable paths: {mutable_paths}
 - Total model/tool steps available: {config.mutator_max_steps}
+- Candidate benchmark evaluations available: {config.max_eval_attempts}
 - Start the source edit within the first third of the budget.
-- Reserve the final third for show_diff, run_validation, and repairs.
+- Call evaluate_candidate by itself after producing a valid diff. Use its benchmark evidence to
+  refine the same candidate, and call it again when the revision is ready. Stop early when the
+  evidence supports no further correction; never exceed the evaluation budget.
+- Reserve enough steps for show_diff, evaluation feedback, and repairs.
 - Prefer the smallest direct change. Do not add a new subsystem when an existing prompt, tool,
   schema, or control-flow check can address the evidence.
 - replace_text requires an exact match. After one mismatch, read the relevant lines and use
@@ -96,7 +107,7 @@ Read the relevant implementation and evidence before editing. Execute one focuse
 consistent with the plan. Treat the hypothesis as testable, verify its evidence against the
 referenced trajectories, and use prior outcomes to avoid repeating an unchanged rejected approach.
 likely_files are guidance rather than a permission boundary. Do not silently switch to another
-diagnosis or bundle unrelated improvements. Run the fixed validation command after editing. Your
-changes remain on disk for the external evolution controller to evaluate and either commit or roll
-back."""
+diagnosis or bundle unrelated improvements. evaluate_candidate runs the fixed validation commands
+before the benchmark. Your changes remain on disk while you refine them; the external controller
+will restore the best evaluated candidate and either commit or roll it back."""
     return agent.run(prompt, session_id=f"generation-{generation}")

@@ -9,9 +9,8 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
   -> Diagnosis 判断主要演化层
   -> Evolution Plan 选择一项可检验的干预
   -> 自修改执行器修改自身源码
-  -> 执行固定的代码检查和测试
-  -> 评测修改后的 Agent
-  -> 提交改进版本或回滚
+  -> [固定检查 -> 评测候选 -> 根据反馈继续修改]，最多 5 次
+  -> 恢复本代最佳候选并提交，或整体回滚
   -> 将接受或拒绝的结果写入 Evolution Memory
   -> 在新的 Python 进程中启动下一代
 ```
@@ -50,18 +49,20 @@ src/strataevo/evolution/git.py  Git 提交和回滚
 ```bash
 strataevo \
   --run-name humaneval-dev \
+  --branch evo_test_inter \
   --generations 1 \
   --eval-limit 5
 ```
 
-该命令会创建或切换到 `evo` 分支。系统首先评测父代，然后执行一次自身修改，最后
-评测修改后的实现。
+该命令要求当前位于或允许切换到 `evo_test_inter` 分支。系统首先评测父代，然后在一次
+自修改会话中根据候选评测结果连续修正实现。
 
 继续同一条演化谱系：
 
 ```bash
 strataevo \
   --run-name humaneval-dev \
+  --branch evo_test_inter \
   --generations 3 \
   --resume
 ```
@@ -70,6 +71,7 @@ strataevo \
 
 ```text
 --mutator-max-steps       Meta-Agent 修改自身时允许的最大模型/工具轮数
+--max-eval-attempts       每代最多进行的候选修改与评测次数
 --eval-offset             HumanEval 开发任务的起始位置
 --eval-limit              使用的开发任务数量
 --eval-workers            同时发送给 vLLM 的评测 Agent 数量
@@ -78,8 +80,11 @@ strataevo \
 --max-score-drop          允许的任务分数下降，默认为 0
 ```
 
-`--mutator-max-steps` 默认是 `40`，`--benchmark-max-steps` 默认是 `12`。两个预算相互独立：前者控制
-每代修改 StrataEvo 源码的 Agent，后者控制每道评测任务中的 Agent。
+`--mutator-max-steps` 默认是 `100`，`--max-eval-attempts` 默认是 `5`，
+`--benchmark-max-steps` 默认是 `12`。三个预算相互独立：第一个是整代自修改会话共享的
+模型/工具轮数，第二个限制该会话内调用 `evaluate_candidate` 的次数，第三个控制每道评测
+任务中的 Agent。每次 attempt 不会重新获得 100 步；无修改或固定验证失败也会消耗一次
+attempt，但不会启动 HumanEval。
 
 ## 自修改过程
 
@@ -95,10 +100,23 @@ replace_lines    按 read_file 返回的闭区间行号替换源码
 delete_file      删除可演化文件
 show_diff        查看当前自身修改
 run_validation   运行固定检查
+evaluate_candidate  验证并评测当前候选，将结果返回当前自修改会话
 ```
 
 Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选择一项具体限制进行修改。
-修改首先保留在当前 Git 工作区中，不会立即成为新一代。
+修改首先保留在当前 Git 工作区中，不会立即成为新一代。它可以调用
+`evaluate_candidate` 获得当前候选的 HumanEval 结果和 Evidence 路径，再在同一会话中继续
+修正，默认每代最多评测 5 个候选状态。
+
+每次 attempt 的 patch、固定验证日志、评测目录和结果保存在：
+
+```text
+evolution/runs/<run_name>/generation-NNNN/attempt-NNNN/
+```
+
+一代结束时，控制器丢弃最后遗留的未评测修改，恢复 pass@1 最高的已评测 patch。只有该
+最佳候选严格超过父代才会提交；否则整个工作区回滚。baseline 不计入
+`--max-eval-attempts`。
 
 `replace_text` 只接受恰好出现一次的原文；一次精确匹配失败后，应重新读取相关行并改用
 `replace_lines`，避免反复猜测空格。自修改提示要求在前三分之一预算内开始编辑，并保留
@@ -160,12 +178,16 @@ evolution/runs/<run_name>/
 │   ├── diagnosis.json
 │   ├── plan.json
 │   ├── agent_result.json
-│   ├── changes.patch
 │   ├── record.json
-│   ├── validation.log
-│   ├── evaluation.log
-│   ├── evaluation/
-│   │   └── evidence.json
+│   ├── attempt-0001/
+│   │   ├── attempt.json
+│   │   ├── changes.patch
+│   │   ├── validation.log
+│   │   ├── evaluation.log
+│   │   └── evaluation/
+│   │       └── evidence.json
+│   ├── attempt-0002/
+│   │   └── ...
 │   └── sessions/
 └── generation-0002-failed-0001/
     └── failure.json
@@ -179,14 +201,16 @@ evolution/runs/<run_name>/
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
 - `plan.json`：从诊断中选中的单一问题、干预、预期指标和长期价值假设；
 - `agent_result.json`：Meta-Agent 的完整消息与工具轨迹；
-- `changes.patch`：本代对自身源码的修改；
-- `record.json`：父子代指标、晋级决定和原因；
-- `validation.log`：Ruff、pytest 和 CLI 检查输出；
-- `evaluation/`：该版本的 HumanEval 候选代码、session 和结果。
-- `evaluation/evidence.json`：由评测结果、候选代码和工具轨迹整理出的结构化证据。
+- `attempt-NNNN/changes.patch`：该次候选对自身源码的累计修改；
+- `attempt-NNNN/attempt.json`：该次验证、评测状态和报告；
+- `record.json`：父代、本代最佳候选、全部 attempts、晋级决定和原因；
+- `attempt-NNNN/validation.log`：Ruff、pytest 和 CLI 检查输出；
+- `attempt-NNNN/evaluation/`：该候选的 HumanEval 代码、session 和结果；
+- `attempt-NNNN/evaluation/evidence.json`：该候选的结构化评测证据；
 - `generation-XXXX-failed-XXXX/`：模型请求、诊断或执行异常时保留的未完成代。
 
-即使某一代被拒绝，`changes.patch` 仍会保留，保证每次自身修改都可以审计和复现。
+即使某一代被拒绝，各 attempt 的 `changes.patch` 仍会保留，保证每次自身修改都可以审计和
+复现。
 异常中断的代不会推进 `state.json`。再次使用 `--resume` 时，未完成目录会先归档为
 `generation-XXXX-failed-XXXX`，然后从同一父代重新执行；包含 `record.json` 的完成目录不会
 被自动覆盖。

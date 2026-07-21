@@ -10,8 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .attempts import CandidateEvaluationSession
 from .diagnosis import DiagnosisReport, diagnose_evaluation
-from .evaluation import HumanEvalEvaluator, run_commands, validation_commands
+from .evaluation import HumanEvalEvaluator, validation_commands
 from .git import GitRepository
 from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .mutator import mutate
@@ -29,7 +30,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generations", type=int, default=1)
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
-    parser.add_argument("--mutator-max-steps", type=int, default=40)
+    parser.add_argument("--mutator-max-steps", type=int, default=100)
+    parser.add_argument("--max-eval-attempts", type=int, default=5)
     parser.add_argument("--eval-limit", type=int, default=5)
     parser.add_argument("--eval-offset", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=4)
@@ -71,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             base_url=args.base_url,
             mutator_max_steps=args.mutator_max_steps,
+            max_eval_attempts=args.max_eval_attempts,
             eval_limit=args.eval_limit,
             eval_offset=args.eval_offset,
             eval_workers=args.eval_workers,
@@ -163,6 +166,15 @@ def run_one_generation(config_path: Path) -> int:
             *(layer.value for layer in selected_diagnosis.related_layers),
         }
         mutation_history = memory.relevant(mutation_layers)
+        candidate_session = CandidateEvaluationSession(
+            repo,
+            git,
+            evaluator,
+            parent_report,
+            generation_dir,
+            commands,
+            config.max_eval_attempts,
+        )
         agent_result = mutate(
             repo,
             config,
@@ -173,6 +185,7 @@ def run_one_generation(config_path: Path) -> int:
             mutation_history,
             generation_dir,
             commands,
+            candidate_session.evaluate,
         )
         _write_json(
             generation_dir / "agent_result.json",
@@ -187,17 +200,30 @@ def run_one_generation(config_path: Path) -> int:
                 "stop_reason": agent_result.stop_reason,
             },
         )
-        changed_paths = git.changed_paths()
-        if not changed_paths:
+        candidate_session.ensure_evaluated()
+        best_attempt = candidate_session.restore_best()
+        attempts = candidate_session.to_dicts()
+        if best_attempt is None:
+            last_attempt = attempts[-1] if attempts else None
+            outcome_type = last_attempt["outcome_type"] if last_attempt else "no_change"
+            reason = (
+                last_attempt["reason"]
+                if last_attempt
+                else "meta-agent produced no source changes"
+            )
             record = _record(
                 generation,
                 parent_commit,
                 None,
                 "rejected",
-                "no_change",
-                "meta-agent produced no source changes",
-                [],
-                None,
+                outcome_type,
+                reason,
+                last_attempt["changed_paths"] if last_attempt else [],
+                (
+                    Path(last_attempt["patch_path"])
+                    if last_attempt and last_attempt["patch_path"]
+                    else None
+                ),
                 diagnosis_path,
                 diagnosis,
                 plan_path,
@@ -205,6 +231,7 @@ def run_one_generation(config_path: Path) -> int:
                 parent_report,
                 None,
                 agent_result,
+                attempts,
             )
             _finish_generation(
                 state_path,
@@ -219,45 +246,9 @@ def run_one_generation(config_path: Path) -> int:
             _print_generation(record)
             return 0
 
-        git.stage()
-        patch_path = generation_dir / "changes.patch"
-        patch_path.write_text(git.staged_diff(), encoding="utf-8")
-        gates_passed, _ = run_commands(
-            commands, repo, generation_dir / "validation.log", timeout=600
-        )
-        if not gates_passed:
-            git.rollback()
-            record = _record(
-                generation,
-                parent_commit,
-                None,
-                "rejected",
-                "validation_failed",
-                "fixed validation commands failed",
-                changed_paths,
-                patch_path,
-                diagnosis_path,
-                diagnosis,
-                plan_path,
-                plan_report,
-                parent_report,
-                None,
-                agent_result,
-            )
-            _finish_generation(
-                state_path,
-                state,
-                generation_dir,
-                record,
-                memory,
-                diagnosis,
-                plan_report,
-                agent_result,
-            )
-            _print_generation(record)
-            return 0
-
-        candidate_report = evaluator.evaluate(generation_dir / "evaluation")
+        changed_paths = best_attempt.changed_paths
+        patch_path = Path(best_attempt.patch_path) if best_attempt.patch_path else None
+        candidate_report = EvaluationReport.from_dict(best_attempt.report)
         accepted, reason = _promotion_decision(parent_report, candidate_report)
         if accepted:
             resulting_commit = git.commit(
@@ -286,6 +277,7 @@ def run_one_generation(config_path: Path) -> int:
             parent_report,
             candidate_report,
             agent_result,
+            attempts,
         )
         _finish_generation(
             state_path,
@@ -367,6 +359,7 @@ def _record(
     parent_report: EvaluationReport,
     candidate_report: EvaluationReport | None,
     agent_result: Any,
+    evaluation_attempts: list[dict[str, Any]],
 ) -> GenerationRecord:
     return GenerationRecord(
         generation=generation,
@@ -390,6 +383,7 @@ def _record(
         agent_steps=agent_result.steps,
         input_tokens=agent_result.usage.input_tokens,
         output_tokens=agent_result.usage.output_tokens,
+        evaluation_attempts=evaluation_attempts,
     )
 
 
@@ -415,6 +409,7 @@ def _validate_args(args: argparse.Namespace) -> None:
     positive = {
         "generations": args.generations,
         "mutator-max-steps": args.mutator_max_steps,
+        "max-eval-attempts": args.max_eval_attempts,
         "eval-limit": args.eval_limit,
         "eval-workers": args.eval_workers,
         "benchmark-max-steps": args.benchmark_max_steps,

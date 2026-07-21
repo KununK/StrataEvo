@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from tinyagent import Tool, tool
@@ -16,12 +17,14 @@ class SelfWorkspace:
         mutable_paths: list[str],
         validation_commands: list[list[str]],
         *,
+        candidate_evaluator: Callable[[], str] | None = None,
         command_timeout: float = 300.0,
         max_output: int = 30_000,
     ) -> None:
         self.root = Path(root).resolve()
         self.mutable_roots = tuple(self._resolve(path) for path in mutable_paths)
         self.validation_commands = validation_commands
+        self.candidate_evaluator = candidate_evaluator
         self.command_timeout = command_timeout
         self.max_output = max_output
 
@@ -151,7 +154,14 @@ class SelfWorkspace:
                     break
             return self._limit("\n\n".join(outputs))
 
-        return [
+        @tool
+        def evaluate_candidate() -> str:
+            """Evaluate the current self-modification and return benchmark feedback."""
+            if self.candidate_evaluator is None:
+                raise RuntimeError("candidate evaluation is unavailable")
+            return self._limit(self.candidate_evaluator())
+
+        tools = [
             list_files,
             read_file,
             search_files,
@@ -162,6 +172,9 @@ class SelfWorkspace:
             show_diff,
             run_validation,
         ]
+        if self.candidate_evaluator is not None:
+            tools.append(evaluate_candidate)
+        return tools
 
     def _resolve(self, path: str) -> Path:
         if not path or "\x00" in path:

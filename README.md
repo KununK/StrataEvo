@@ -166,8 +166,10 @@ def evaluate_candidate(candidate: str, task: str) -> dict:
 StrataEvo 现在支持代码库级递归自进化：系统先将候选代码、任务结果和工具轨迹整理为
 结构化 Evidence，再由模型在 Model、Context、Tools 和 Architecture 四层中诊断主要
 演化对象。Evolution Planner 从诊断中选择一项可检验的干预，再由 Tinyagent 运行实例承担的
-自修改角色执行。通过固定测试和 HumanEval 重新评测后，改进版本会提交到 `evo` 分支，失败
-版本自动回滚。下一代由新的 Python 进程加载修改后的源码。每个完成代的诊断、计划、修改、
+自修改角色执行。自修改 Agent 可以在同一代内调用只读的 `evaluate_candidate`，根据固定测试、
+HumanEval 结果和 Evidence 连续修正候选，默认每代最多评测 5 次，整代共享 100 个
+Mutator step。控制器最终恢复本代 pass@1 最高的已评测候选：优于父代则提交，未提升则自动
+回滚。下一代由新的 Python 进程加载修改后的源码。每个完成代的诊断、计划、各次候选修改、
 预期指标对照及接受或拒绝结果会写入
 `evolution/runs/<run_name>/evolution_memory.jsonl`，供后续代诊断和修改时参考。
 
@@ -175,7 +177,11 @@ Planner 会看到实际可修改源码清单，执行器支持精确文本替换
 无修改、固定验证失败、基准拒绝或接受，避免把执行失败误认为演化方向无效。
 
 ```bash
-strataevo --run-name humaneval-dev --generations 1 --eval-limit 5
+strataevo \
+  --run-name humaneval-dev \
+  --branch evo_test_inter \
+  --generations 1 \
+  --eval-limit 5
 ```
 
 这里修改的是 Agent 自身源码，不是 HumanEval 的 `solution.py`。设计边界、晋级条件、

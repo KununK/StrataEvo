@@ -27,7 +27,8 @@ from tinyagent import AgentResult, Message, Usage
 class EvolutionTests(unittest.TestCase):
     def test_mutator_default_reserves_repair_budget(self):
         args = parse_args([])
-        self.assertEqual(args.mutator_max_steps, 40)
+        self.assertEqual(args.mutator_max_steps, 100)
+        self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
 
     def test_self_workspace_can_only_write_evolvable_source(self):
@@ -284,8 +285,10 @@ class EvolutionTests(unittest.TestCase):
                 _history,
                 _directory,
                 _commands,
+                evaluate_candidate,
             ):
                 agent_file.write_text("VERSION = 1\n", encoding="utf-8")
+                evaluate_candidate()
                 return AgentResult(
                     "updated", [Message("assistant", "updated")], Usage(), 1, "completed"
                 )
@@ -317,6 +320,83 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
             commit_subject = self._git_output(root, "log", "-1", "--pretty=%s").strip()
             self.assertEqual(commit_subject, "evolve: generation 1 pass@1 0.600000")
+
+    def test_generation_commits_best_evaluated_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            agent_file = source / "agent.py"
+            agent_file.write_text("VERSION = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "evo")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+
+            run_dir = root / "evolution/runs/test"
+            run_dir.mkdir(parents=True)
+            config = EvolutionConfig(
+                repo=str(root),
+                run_name="test",
+                branch="evo",
+                mutable_paths=["src/tinyagent"],
+                max_eval_attempts=2,
+            )
+            config_path = run_dir / "config.json"
+            config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+            reports = iter(
+                [
+                    EvaluationReport(0.5, 0.49, {}, "parent", "parent.log"),
+                    EvaluationReport(0.7, 0.69, {}, "first", "first.log"),
+                    EvaluationReport(0.6, 0.59, {}, "second", "second.log"),
+                ]
+            )
+
+            class FakeEvaluator:
+                def __init__(self, _repo, _config):
+                    pass
+
+                def evaluate(self, _output_dir):
+                    return next(reports)
+
+            def fake_mutate(*args):
+                evaluate_candidate = args[-1]
+                agent_file.write_text("VERSION = 1\n", encoding="utf-8")
+                evaluate_candidate()
+                agent_file.write_text("VERSION = 2\n", encoding="utf-8")
+                evaluate_candidate()
+                agent_file.write_text("VERSION = 3\n", encoding="utf-8")
+                return AgentResult(
+                    "tested twice", [Message("assistant", "done")], Usage(), 4, "completed"
+                )
+
+            with (
+                patch("strataevo.evolution.cli.HumanEvalEvaluator", FakeEvaluator),
+                patch(
+                    "strataevo.evolution.cli.diagnose_evaluation",
+                    return_value=self._diagnosis_report(),
+                ),
+                patch(
+                    "strataevo.evolution.cli.plan_evolution",
+                    return_value=self._plan_report(),
+                ),
+                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch("strataevo.evolution.cli.mutate", side_effect=fake_mutate),
+            ):
+                self.assertEqual(run_one_generation(config_path), 0)
+
+            self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
+            record = json.loads(
+                (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["candidate_report"]["task_score"], 0.7)
+            self.assertEqual(len(record["evaluation_attempts"]), 2)
+            self.assertEqual(
+                [item["report"]["task_score"] for item in record["evaluation_attempts"]],
+                [0.7, 0.6],
+            )
 
     def test_failed_diagnosis_can_resume_same_generation(self):
         with tempfile.TemporaryDirectory() as directory:

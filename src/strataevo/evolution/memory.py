@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +66,7 @@ class EvolutionMemoryEntry:
     candidate_task_score: float | None
     candidate_utility: float | None
     utility_delta: float | None
+    evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -89,6 +90,7 @@ class EvolutionMemoryEntry:
             "candidate_task_score": self.candidate_task_score,
             "candidate_utility": self.candidate_utility,
             "utility_delta": self.utility_delta,
+            "evaluation_attempts": [_attempt_context(item) for item in self.evaluation_attempts],
         }
 
     @classmethod
@@ -110,6 +112,11 @@ class EvolutionMemoryEntry:
         values.setdefault(
             "outcome_type", _legacy_outcome_type(values.get("decision"), values.get("reason"))
         )
+        values.setdefault("evaluation_attempts", [])
+        if not isinstance(values["evaluation_attempts"], list) or not all(
+            isinstance(item, dict) for item in values["evaluation_attempts"]
+        ):
+            raise ValueError("memory evaluation_attempts must be a list of objects")
         entry = cls(**values)
         if entry.generation <= 0:
             raise ValueError("memory generation must be positive")
@@ -119,6 +126,7 @@ class EvolutionMemoryEntry:
             "accepted",
             "no_change",
             "validation_failed",
+            "evaluation_failed",
             "benchmark_rejected",
         }:
             raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
@@ -165,6 +173,7 @@ class EvolutionMemoryEntry:
             utility_delta=(
                 candidate_utility - parent_utility if candidate_utility is not None else None
             ),
+            evaluation_attempts=list(record.evaluation_attempts),
         )
 
 
@@ -259,6 +268,19 @@ def _object(value: Any, field_name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"memory {field_name} must be an object")
     return value
+
+
+def _attempt_context(attempt: dict[str, Any]) -> dict[str, Any]:
+    report = attempt.get("report")
+    return {
+        "number": attempt.get("number"),
+        "outcome_type": attempt.get("outcome_type"),
+        "reason": str(attempt.get("reason", ""))[:500],
+        "changed_paths": attempt.get("changed_paths", []),
+        "task_score": report.get("task_score") if isinstance(report, dict) else None,
+        "utility": report.get("utility") if isinstance(report, dict) else None,
+        "output_dir": report.get("output_dir") if isinstance(report, dict) else None,
+    }
 
 
 def _validate_limit(limit: int) -> None:

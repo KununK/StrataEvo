@@ -60,6 +60,17 @@ class GitRepository:
         self._run(["commit", "-m", message])
         return self.head()
 
+    def apply_patch(self, patch_path: Path) -> None:
+        completed = subprocess.run(
+            ["git", "apply", "--index", "--binary", str(patch_path)],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"git apply failed: {completed.stderr.strip()}")
+
     def rollback(self) -> None:
         self._run(["restore", "--staged", "--worktree", "--", *self.mutable_paths])
         untracked = self._run(

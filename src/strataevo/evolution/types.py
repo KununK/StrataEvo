@@ -16,7 +16,8 @@ class EvolutionConfig:
     generations: int = 1
     model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     base_url: str = "http://localhost:8000/v1"
-    mutator_max_steps: int = 40
+    mutator_max_steps: int = 100
+    max_eval_attempts: int = 5
     mutable_paths: list[str] = field(default_factory=lambda: list(DEFAULT_MUTABLE_PATHS))
     eval_limit: int = 5
     eval_offset: int = 0
@@ -73,6 +74,7 @@ class GenerationRecord:
     agent_steps: int
     input_tokens: int
     output_tokens: int
+    evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
