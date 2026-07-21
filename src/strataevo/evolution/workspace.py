@@ -126,7 +126,7 @@ class SelfWorkspace:
         def show_diff() -> str:
             """Show the current uncommitted self-modification diff."""
             completed = subprocess.run(
-                ["git", "diff", "--", *self._relative_mutable_paths()],
+                ["git", "diff", "HEAD", "--", *self._relative_mutable_paths()],
                 cwd=self.root,
                 capture_output=True,
                 text=True,

@@ -31,6 +31,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--mutator-max-steps", type=int, default=200)
+    parser.add_argument("--mutator-rounds", type=int, default=5)
     parser.add_argument("--max-eval-attempts", type=int, default=5)
     parser.add_argument("--eval-limit", type=int, default=5)
     parser.add_argument("--eval-offset", type=int, default=0)
@@ -73,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             base_url=args.base_url,
             mutator_max_steps=args.mutator_max_steps,
+            mutator_rounds=args.mutator_rounds,
             max_eval_attempts=args.max_eval_attempts,
             eval_limit=args.eval_limit,
             eval_offset=args.eval_offset,
@@ -409,6 +411,7 @@ def _validate_args(args: argparse.Namespace) -> None:
     positive = {
         "generations": args.generations,
         "mutator-max-steps": args.mutator_max_steps,
+        "mutator-rounds": args.mutator_rounds,
         "max-eval-attempts": args.max_eval_attempts,
         "eval-limit": args.eval_limit,
         "eval-workers": args.eval_workers,

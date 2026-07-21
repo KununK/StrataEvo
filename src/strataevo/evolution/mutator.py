@@ -93,6 +93,7 @@ Relevant prior evolution outcomes:
 Execution constraints:
 - Writable paths: {mutable_paths}
 - Total model/tool steps available: {config.mutator_max_steps}
+- Refinement rounds available: {config.mutator_rounds}
 - Candidate benchmark evaluations available: {config.max_eval_attempts}
 - Start the source edit within the first third of the budget.
 - Work on one candidate until the current round ends. The controller will then validate and
@@ -127,9 +128,9 @@ def _run_refinement_session(
     latest: AgentResult | None = None
     prompt = initial_prompt
 
-    for round_number in range(1, config.max_eval_attempts + 1):
-        rounds_left = config.max_eval_attempts - round_number + 1
-        agent.max_steps = _round_step_budget(remaining_steps, rounds_left, first=round_number == 1)
+    for round_number in range(1, config.mutator_rounds + 1):
+        rounds_left = config.mutator_rounds - round_number + 1
+        agent.max_steps = _round_step_budget(remaining_steps, rounds_left)
         latest = agent.run(prompt, session_id=session_id)
         total_steps += latest.steps
         total_usage = total_usage + latest.usage
@@ -140,10 +141,13 @@ def _run_refinement_session(
         if data.get("candidate_task_score") == 1.0:
             stop_reason = "completed"
             break
-        if data.get("outcome_type") == "limit_reached" or remaining_steps <= 0:
+        if data.get("evaluations_remaining") == 0 or remaining_steps <= 0:
             stop_reason = "max_steps" if remaining_steps <= 0 else "evaluation_limit"
             break
-        if latest.output.strip().upper() == "FINALIZE":
+        if (
+            latest.output.strip().upper() == "FINALIZE"
+            and data.get("outcome_type") in {"evaluated", "no_change"}
+        ):
             stop_reason = "completed"
             break
 
@@ -155,7 +159,7 @@ candidate was benchmarked, inspect its evidence before deciding the next edit. M
 revision that responds to this feedback. If no further justified improvement remains, do not edit
 and answer exactly FINALIZE."""
     else:
-        stop_reason = "evaluation_limit"
+        stop_reason = "round_limit"
 
     if latest is None:
         raise RuntimeError("refinement session produced no agent result")
@@ -168,11 +172,9 @@ and answer exactly FINALIZE."""
     )
 
 
-def _round_step_budget(remaining_steps: int, rounds_left: int, *, first: bool) -> int:
+def _round_step_budget(remaining_steps: int, rounds_left: int) -> int:
     if remaining_steps <= 0 or rounds_left <= 0:
         raise ValueError("remaining_steps and rounds_left must be positive")
-    if first and rounds_left > 1:
-        return min(remaining_steps, max(20, round(remaining_steps * 0.3)))
     return max(1, (remaining_steps + rounds_left - 1) // rounds_left)
 
 

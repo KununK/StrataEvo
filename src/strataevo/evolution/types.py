@@ -17,6 +17,7 @@ class EvolutionConfig:
     model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     base_url: str = "http://localhost:8000/v1"
     mutator_max_steps: int = 200
+    mutator_rounds: int = 5
     max_eval_attempts: int = 5
     mutable_paths: list[str] = field(default_factory=lambda: list(DEFAULT_MUTABLE_PATHS))
     eval_limit: int = 5

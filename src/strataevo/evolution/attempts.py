@@ -41,27 +41,32 @@ class CandidateEvaluationSession:
         parent_report: EvaluationReport,
         generation_dir: Path,
         validation_commands: list[list[str]],
-        max_attempts: int,
+        max_evaluations: int,
     ) -> None:
-        if max_attempts <= 0:
-            raise ValueError("max_attempts must be positive")
+        if max_evaluations <= 0:
+            raise ValueError("max_evaluations must be positive")
         self.repo = repo
         self.git = git
         self.evaluator = evaluator
         self.parent_report = parent_report
         self.generation_dir = generation_dir
         self.validation_commands = validation_commands
-        self.max_attempts = max_attempts
+        self.max_evaluations = max_evaluations
         self.attempts: list[EvaluationAttempt] = []
+
+    @property
+    def evaluations_used(self) -> int:
+        return sum(attempt.report is not None for attempt in self.attempts)
 
     def evaluate(self) -> str:
         """Validate and benchmark the current candidate, returning feedback to the mutator."""
-        if len(self.attempts) >= self.max_attempts:
+        if self.evaluations_used >= self.max_evaluations:
             return json.dumps(
                 {
                     "outcome_type": "limit_reached",
-                    "reason": f"all {self.max_attempts} candidate evaluations have been used",
-                    "attempts_remaining": 0,
+                    "reason": f"all {self.max_evaluations} benchmark evaluations have been used",
+                    "evaluations_used": self.evaluations_used,
+                    "evaluations_remaining": 0,
                 },
                 ensure_ascii=False,
             )
@@ -86,13 +91,15 @@ class CandidateEvaluationSession:
         patch = self.git.staged_diff()
         duplicate = self._find_patch(patch)
         if duplicate is not None:
+            if duplicate is not self._best_improving_attempt():
+                self._restore(self._best_improving_attempt())
             return self._feedback(duplicate, cached=True)
 
         number = len(self.attempts) + 1
         attempt_dir = self.generation_dir / f"attempt-{number:04d}"
         attempt_dir.mkdir(parents=True, exist_ok=False)
         print(
-            f"[evolution] candidate attempt {number}/{self.max_attempts}: validating",
+            f"[evolution] candidate check {number}: validating",
             flush=True,
         )
         patch_path = attempt_dir / "changes.patch"
@@ -116,6 +123,11 @@ class CandidateEvaluationSession:
             )
             return self._finish_attempt(attempt)
 
+        benchmark_number = self.evaluations_used + 1
+        print(
+            f"[evolution] candidate benchmark {benchmark_number}/{self.max_evaluations}",
+            flush=True,
+        )
         try:
             report = self.evaluator.evaluate(attempt_dir / "evaluation")
         except Exception as error:
@@ -129,21 +141,37 @@ class CandidateEvaluationSession:
                 None,
             )
             return self._finish_attempt(attempt)
-        delta = report.task_score - self.parent_report.task_score
+        previous_best = self._best_attempt()
+        best_score = max(
+            self.parent_report.task_score,
+            float(previous_best.report["task_score"]) if previous_best else float("-inf"),
+        )
+        regressed = report.task_score <= best_score
+        restore_attempt = self._best_improving_attempt()
+        reason = (
+            "pass@1 delta versus parent: "
+            f"{report.task_score - self.parent_report.task_score:+.6f}"
+        )
+        if regressed:
+            restored = "best candidate" if restore_attempt else "parent"
+            reason += f"; restored {restored} after non-improving result"
         attempt = EvaluationAttempt(
             number,
             "evaluated",
-            f"pass@1 delta versus parent: {delta:+.6f}",
+            reason,
             changed_paths,
             str(patch_path),
             str(validation_log),
             report.to_dict(),
         )
-        return self._finish_attempt(attempt)
+        feedback = self._finish_attempt(attempt)
+        if regressed:
+            self._restore(restore_attempt)
+        return feedback
 
     def ensure_evaluated(self) -> None:
         """Evaluate once when the mutator edited code but never requested feedback."""
-        if len(self.attempts) >= self.max_attempts or not self.git.changed_paths():
+        if self.evaluations_used >= self.max_evaluations or not self.git.changed_paths():
             return
         self.git.stage()
         current_patch = self.git.staged_diff()
@@ -153,16 +181,8 @@ class CandidateEvaluationSession:
 
     def restore_best(self) -> EvaluationAttempt | None:
         """Discard untested final edits and restore the highest-scoring evaluated patch."""
-        evaluated = [attempt for attempt in self.attempts if attempt.report is not None]
-        best = (
-            max(evaluated, key=lambda item: float(item.report["task_score"]))
-            if evaluated
-            else None
-        )
-        if self.git.changed_paths():
-            self.git.rollback()
-        if best and best.patch_path:
-            self.git.apply_patch(Path(best.patch_path))
+        best = self._best_attempt()
+        self._restore(best)
         return best
 
     def to_dicts(self) -> list[dict]:
@@ -184,7 +204,8 @@ class CandidateEvaluationSession:
             "cached": cached,
             "outcome_type": attempt.outcome_type,
             "reason": attempt.reason,
-            "attempts_remaining": self.max_attempts - len(self.attempts),
+            "evaluations_used": self.evaluations_used,
+            "evaluations_remaining": self.max_evaluations - self.evaluations_used,
             "parent_task_score": self.parent_report.task_score,
             "candidate_task_score": report["task_score"] if report else None,
             "candidate_utility": report["utility"] if report else None,
@@ -193,7 +214,7 @@ class CandidateEvaluationSession:
         }
         if report and float(report["task_score"]) >= 1.0:
             feedback["instruction"] = "Maximum task score reached; stop editing."
-        elif self.max_attempts == len(self.attempts):
+        elif self.evaluations_used >= self.max_evaluations:
             feedback["instruction"] = "Evaluation budget exhausted; stop editing."
         else:
             feedback["instruction"] = (
@@ -207,6 +228,26 @@ class CandidateEvaluationSession:
             if attempt.patch_path and Path(attempt.patch_path).read_text(encoding="utf-8") == patch:
                 return attempt
         return None
+
+    def _best_attempt(self) -> EvaluationAttempt | None:
+        evaluated = [attempt for attempt in self.attempts if attempt.report is not None]
+        return (
+            max(evaluated, key=lambda item: float(item.report["task_score"]))
+            if evaluated
+            else None
+        )
+
+    def _best_improving_attempt(self) -> EvaluationAttempt | None:
+        best = self._best_attempt()
+        if best and float(best.report["task_score"]) > self.parent_report.task_score:
+            return best
+        return None
+
+    def _restore(self, attempt: EvaluationAttempt | None) -> None:
+        if self.git.changed_paths():
+            self.git.rollback()
+        if attempt and attempt.patch_path:
+            self.git.apply_patch(Path(attempt.patch_path))
 
 
 def _last_output(output: str, limit: int = 4000) -> str:

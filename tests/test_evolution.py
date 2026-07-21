@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from strataevo.evolution.attempts import CandidateEvaluationSession
 from strataevo.evolution.cli import (
     _prepare_generation_dir,
     _promotion_decision,
@@ -29,6 +30,7 @@ class EvolutionTests(unittest.TestCase):
     def test_mutator_default_reserves_repair_budget(self):
         args = parse_args([])
         self.assertEqual(args.mutator_max_steps, 200)
+        self.assertEqual(args.mutator_rounds, 5)
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
 
@@ -56,6 +58,7 @@ class EvolutionTests(unittest.TestCase):
             repo=".",
             run_name="test",
             mutator_max_steps=10,
+            mutator_rounds=2,
             max_eval_attempts=2,
         )
 
@@ -64,21 +67,29 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(len(agent.prompts), 2)
         self.assertEqual(agent.prompts[0], ("initial", "generation-refinement"))
         self.assertIn("validation_failed", agent.prompts[1][0])
-        self.assertEqual(agent.budgets, [10, 9])
+        self.assertEqual(agent.budgets, [5, 9])
         self.assertEqual(result.steps, 2)
         self.assertEqual(result.usage, Usage(20, 4))
-        self.assertEqual(result.stop_reason, "evaluation_limit")
+        self.assertEqual(result.stop_reason, "round_limit")
 
-    def test_round_step_budgets_fit_generation_total(self):
-        remaining = 200
-        budgets = []
-        for index in range(5):
-            budget = _round_step_budget(remaining, 5 - index, first=index == 0)
-            budgets.append(budget)
-            remaining -= budget
+    def test_round_step_budget_adapts_to_total_and_round_count(self):
+        for total, rounds, expected in (
+            (200, 5, [40, 40, 40, 40, 40]),
+            (200, 3, [67, 67, 66]),
+            (10, 4, [3, 3, 2, 2]),
+        ):
+            remaining = total
+            budgets = []
+            for index in range(rounds):
+                budget = _round_step_budget(remaining, rounds - index)
+                budgets.append(budget)
+                remaining -= budget
+            self.assertEqual(budgets, expected)
+            self.assertEqual(sum(budgets), total)
 
-        self.assertEqual(budgets, [60, 35, 35, 35, 35])
-        self.assertEqual(sum(budgets), 200)
+    def test_old_config_uses_default_mutator_rounds(self):
+        config = EvolutionConfig.from_dict({"repo": ".", "run_name": "old-run"})
+        self.assertEqual(config.mutator_rounds, 5)
 
     def test_self_workspace_can_only_write_evolvable_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +147,99 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(existing.read_text(encoding="utf-8"), "OLD = True\n")
             self.assertFalse(added.exists())
             repository.ensure_clean()
+
+    def test_validation_failure_does_not_use_benchmark_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            agent_file = source / "agent.py"
+            agent_file.write_text("VERSION = 0\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+
+            class FakeEvaluator:
+                def evaluate(self, _output_dir):
+                    return EvaluationReport(0.6, 0.6, {}, "candidate", "candidate.log")
+
+            session = CandidateEvaluationSession(
+                root,
+                GitRepository(root, ["src/tinyagent"]),
+                FakeEvaluator(),
+                EvaluationReport(0.5, 0.5, {}, "parent", "parent.log"),
+                root / "attempts",
+                [["validate"]],
+                1,
+            )
+            (root / "attempts").mkdir()
+            agent_file.write_text("VERSION = broken\n", encoding="utf-8")
+            with patch(
+                "strataevo.evolution.attempts.run_commands",
+                return_value=(False, "syntax error"),
+            ):
+                feedback = json.loads(session.evaluate())
+
+            self.assertEqual(feedback["outcome_type"], "validation_failed")
+            self.assertEqual(feedback["evaluations_used"], 0)
+            self.assertEqual(feedback["evaluations_remaining"], 1)
+
+            agent_file.write_text("VERSION = 1\n", encoding="utf-8")
+            with patch(
+                "strataevo.evolution.attempts.run_commands",
+                return_value=(True, "ok"),
+            ):
+                feedback = json.loads(session.evaluate())
+
+            self.assertEqual(feedback["outcome_type"], "evaluated")
+            self.assertEqual(feedback["evaluations_used"], 1)
+            self.assertEqual(feedback["evaluations_remaining"], 0)
+            self.assertEqual(len(session.attempts), 2)
+
+    def test_regression_restores_best_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            agent_file = source / "agent.py"
+            agent_file.write_text("VERSION = 0\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            reports = iter(
+                [
+                    EvaluationReport(0.7, 0.7, {}, "first", "first.log"),
+                    EvaluationReport(0.6, 0.6, {}, "second", "second.log"),
+                ]
+            )
+
+            class FakeEvaluator:
+                def evaluate(self, _output_dir):
+                    return next(reports)
+
+            attempts = root / "attempts"
+            attempts.mkdir()
+            session = CandidateEvaluationSession(
+                root,
+                GitRepository(root, ["src/tinyagent"]),
+                FakeEvaluator(),
+                EvaluationReport(0.5, 0.5, {}, "parent", "parent.log"),
+                attempts,
+                [],
+                2,
+            )
+            agent_file.write_text("VERSION = 1\n", encoding="utf-8")
+            session.evaluate()
+            agent_file.write_text("VERSION = 2\n", encoding="utf-8")
+            feedback = json.loads(session.evaluate())
+
+            self.assertIn("restored best candidate", feedback["reason"])
+            self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
+            self.assertEqual(session.evaluations_used, 2)
 
     def test_promotion_requires_strictly_higher_task_score(self):
         parent = EvaluationReport(0.8, 0.79, {}, "parent", "parent.log")

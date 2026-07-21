@@ -71,7 +71,8 @@ strataevo \
 
 ```text
 --mutator-max-steps       Meta-Agent 修改自身时允许的最大模型/工具轮数
---max-eval-attempts       每代最多进行的候选修改与评测次数
+--mutator-rounds          每代最多进行的连续修改反馈轮数
+--max-eval-attempts       每代最多进行的候选 benchmark 次数
 --eval-offset             HumanEval 开发任务的起始位置
 --eval-limit              使用的开发任务数量
 --eval-workers            同时发送给 vLLM 的评测 Agent 数量
@@ -80,11 +81,10 @@ strataevo \
 --max-score-drop          允许的任务分数下降，默认为 0
 ```
 
-`--mutator-max-steps` 默认是 `200`，`--max-eval-attempts` 默认是 `5`，
-`--benchmark-max-steps` 默认是 `12`。三个预算相互独立：第一个是整代自修改会话共享的
-模型/工具轮数，第二个限制该会话内调用 `evaluate_candidate` 的次数，第三个控制每道评测
-任务中的 Agent。每次 attempt 不会重新获得 200 步；无修改或固定验证失败也会消耗一次
-attempt，但不会启动 HumanEval。
+`--mutator-max-steps` 默认是 `200`，`--mutator-rounds` 和 `--max-eval-attempts` 默认都是
+`5`，`--benchmark-max-steps` 默认是 `12`。四个预算相互独立：它们依次控制整代自修改
+总步数、连续反馈轮数、候选 benchmark 次数，以及每道评测任务中的 Agent 步数。无修改或
+固定验证失败会留下 attempt 记录，但不占用 benchmark 次数。
 
 ## 自修改过程
 
@@ -109,8 +109,9 @@ Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选
 修正，默认每代最多评测 5 个候选状态。
 
 为避免模型耗尽全部 step 后才尝试评测，控制器还会强制把整代预算划分为连续 refinement
-round。默认 200 steps、5 次评测时，各轮上限依次为 `60/35/35/35/35`。每轮结束后控制器
-自动评测当前 diff，并把验证或 HumanEval 结果追加到同一个 session 后再启动下一轮；模型
+round。每轮 step 上限根据剩余总预算和剩余 round 数动态均分。默认 200 steps、5 rounds
+时初始上限为每轮 40；如果某轮提前结束，未使用的预算会滚入后续轮次。每轮结束后控制器
+自动检查当前 diff，并把验证或 HumanEval 结果追加到同一个 session 后再启动下一轮；模型
 主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
 
 每次 attempt 的 patch、固定验证日志、评测目录和结果保存在：
@@ -119,9 +120,10 @@ round。默认 200 steps、5 次评测时，各轮上限依次为 `60/35/35/35/3
 evolution/runs/<run_name>/generation-NNNN/attempt-NNNN/
 ```
 
-一代结束时，控制器丢弃最后遗留的未评测修改，恢复 pass@1 最高的已评测 patch。只有该
-最佳候选严格超过父代才会提交；否则整个工作区回滚。baseline 不计入
-`--max-eval-attempts`。
+候选 benchmark 未超过父代或本代已有最佳候选时，控制器立即恢复父代或最佳 patch，再让
+模型继续修改。一代结束时，控制器丢弃最后遗留的未评测修改，并恢复 pass@1 最高的已评测
+patch。只有该最佳候选严格超过父代才会提交；否则整个工作区回滚。baseline 和 validation
+失败都不计入 `--max-eval-attempts`。
 
 `replace_text` 只接受恰好出现一次的原文；一次精确匹配失败后，应重新读取相关行并改用
 `replace_lines`，避免反复猜测空格。自修改提示要求在前三分之一预算内开始编辑，并保留
