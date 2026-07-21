@@ -13,6 +13,7 @@ from strataevo.evolution.cli import (
 )
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
+from strataevo.evolution.mutator import _round_step_budget, _run_refinement_session
 from strataevo.evolution.plan import (
     EvolutionPlan,
     EvolutionPlanReport,
@@ -30,6 +31,54 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(args.mutator_max_steps, 100)
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
+
+    def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
+        class FakeAgent:
+            max_steps = 0
+
+            def __init__(self):
+                self.prompts = []
+                self.budgets = []
+
+            def run(self, prompt, *, session_id):
+                self.prompts.append((prompt, session_id))
+                self.budgets.append(self.max_steps)
+                return AgentResult("", [Message("assistant", "")], Usage(10, 2), 1, "max_steps")
+
+        feedback = iter(
+            [
+                '{"outcome_type":"validation_failed","reason":"syntax error"}',
+                '{"outcome_type":"evaluated","candidate_task_score":0.6}',
+            ]
+        )
+        agent = FakeAgent()
+        config = EvolutionConfig(
+            repo=".",
+            run_name="test",
+            mutator_max_steps=10,
+            max_eval_attempts=2,
+        )
+
+        result = _run_refinement_session(agent, "initial", lambda: next(feedback), config)
+
+        self.assertEqual(len(agent.prompts), 2)
+        self.assertEqual(agent.prompts[0], ("initial", "generation-refinement"))
+        self.assertIn("validation_failed", agent.prompts[1][0])
+        self.assertEqual(agent.budgets, [10, 9])
+        self.assertEqual(result.steps, 2)
+        self.assertEqual(result.usage, Usage(20, 4))
+        self.assertEqual(result.stop_reason, "evaluation_limit")
+
+    def test_round_step_budgets_fit_generation_total(self):
+        remaining = 100
+        budgets = []
+        for index in range(5):
+            budget = _round_step_budget(remaining, 5 - index, first=index == 0)
+            budgets.append(budget)
+            remaining -= budget
+
+        self.assertEqual(budgets, [30, 18, 18, 17, 17])
+        self.assertEqual(sum(budgets), 100)
 
     def test_self_workspace_can_only_write_evolvable_source(self):
         with tempfile.TemporaryDirectory() as directory:

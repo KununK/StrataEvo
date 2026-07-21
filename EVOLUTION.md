@@ -108,6 +108,11 @@ Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选
 `evaluate_candidate` 获得当前候选的 HumanEval 结果和 Evidence 路径，再在同一会话中继续
 修正，默认每代最多评测 5 个候选状态。
 
+为避免模型耗尽全部 step 后才尝试评测，控制器还会强制把整代预算划分为连续 refinement
+round。默认 100 steps、5 次评测时，各轮上限依次为 `30/18/18/17/17`。每轮结束后控制器
+自动评测当前 diff，并把验证或 HumanEval 结果追加到同一个 session 后再启动下一轮；模型
+主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
+
 每次 attempt 的 patch、固定验证日志、评测目录和结果保存在：
 
 ```text

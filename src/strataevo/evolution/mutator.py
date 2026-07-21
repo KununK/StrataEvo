@@ -12,6 +12,7 @@ from tinyagent import (
     OpenAICompatibleModel,
     SessionStore,
     ToolRegistry,
+    Usage,
     allow_all,
 )
 
@@ -94,9 +95,9 @@ Execution constraints:
 - Total model/tool steps available: {config.mutator_max_steps}
 - Candidate benchmark evaluations available: {config.max_eval_attempts}
 - Start the source edit within the first third of the budget.
-- Call evaluate_candidate by itself after producing a valid diff. Use its benchmark evidence to
-  refine the same candidate, and call it again when the revision is ready. Stop early when the
-  evidence supports no further correction; never exceed the evaluation budget.
+- Work on one candidate until the current round ends. The controller will then validate and
+  evaluate the current diff and return the result in this same session. You may also call
+  evaluate_candidate yourself when ready; repeated evaluation of an unchanged patch is cached.
 - Reserve enough steps for show_diff, evaluation feedback, and repairs.
 - Prefer the smallest direct change. Do not add a new subsystem when an existing prompt, tool,
   schema, or control-flow check can address the evidence.
@@ -110,4 +111,74 @@ likely_files are guidance rather than a permission boundary. Do not silently swi
 diagnosis or bundle unrelated improvements. evaluate_candidate runs the fixed validation commands
 before the benchmark. Your changes remain on disk while you refine them; the external controller
 will restore the best evaluated candidate and either commit or roll it back."""
-    return agent.run(prompt, session_id=f"generation-{generation}")
+    return _run_refinement_session(agent, prompt, evaluate_candidate, config)
+
+
+def _run_refinement_session(
+    agent: Agent,
+    initial_prompt: str,
+    evaluate_candidate: Callable[[], str],
+    config: EvolutionConfig,
+) -> AgentResult:
+    session_id = "generation-refinement"
+    remaining_steps = config.mutator_max_steps
+    total_steps = 0
+    total_usage = Usage()
+    latest: AgentResult | None = None
+    prompt = initial_prompt
+
+    for round_number in range(1, config.max_eval_attempts + 1):
+        rounds_left = config.max_eval_attempts - round_number + 1
+        agent.max_steps = _round_step_budget(remaining_steps, rounds_left, first=round_number == 1)
+        latest = agent.run(prompt, session_id=session_id)
+        total_steps += latest.steps
+        total_usage = total_usage + latest.usage
+        remaining_steps -= latest.steps
+
+        feedback = evaluate_candidate()
+        data = _feedback_object(feedback)
+        if data.get("candidate_task_score") == 1.0:
+            stop_reason = "completed"
+            break
+        if data.get("outcome_type") == "limit_reached" or remaining_steps <= 0:
+            stop_reason = "max_steps" if remaining_steps <= 0 else "evaluation_limit"
+            break
+        if latest.output.strip().upper() == "FINALIZE":
+            stop_reason = "completed"
+            break
+
+        prompt = f"""Candidate evaluation feedback for refinement round {round_number}:
+{feedback}
+
+Continue from the current working tree. Fix validation errors before changing direction. If the
+candidate was benchmarked, inspect its evidence before deciding the next edit. Make a coherent
+revision that responds to this feedback. If no further justified improvement remains, do not edit
+and answer exactly FINALIZE."""
+    else:
+        stop_reason = "evaluation_limit"
+
+    if latest is None:
+        raise RuntimeError("refinement session produced no agent result")
+    return AgentResult(
+        latest.output,
+        latest.messages,
+        total_usage,
+        total_steps,
+        stop_reason,
+    )
+
+
+def _round_step_budget(remaining_steps: int, rounds_left: int, *, first: bool) -> int:
+    if remaining_steps <= 0 or rounds_left <= 0:
+        raise ValueError("remaining_steps and rounds_left must be positive")
+    if first and rounds_left > 1:
+        return min(remaining_steps, max(20, round(remaining_steps * 0.3)))
+    return max(1, (remaining_steps + rounds_left - 1) // rounds_left)
+
+
+def _feedback_object(feedback: str) -> dict:
+    try:
+        data = json.loads(feedback)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}

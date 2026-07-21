@@ -67,10 +67,10 @@ class CandidateEvaluationSession:
             )
 
         changed_paths = self.git.changed_paths()
-        number = len(self.attempts) + 1
-        attempt_dir = self.generation_dir / f"attempt-{number:04d}"
-        attempt_dir.mkdir(parents=True, exist_ok=False)
         if not changed_paths:
+            number = len(self.attempts) + 1
+            attempt_dir = self.generation_dir / f"attempt-{number:04d}"
+            attempt_dir.mkdir(parents=True, exist_ok=False)
             attempt = EvaluationAttempt(
                 number,
                 "no_change",
@@ -82,13 +82,21 @@ class CandidateEvaluationSession:
             )
             return self._finish_attempt(attempt)
 
+        self.git.stage()
+        patch = self.git.staged_diff()
+        duplicate = self._find_patch(patch)
+        if duplicate is not None:
+            return self._feedback(duplicate, cached=True)
+
+        number = len(self.attempts) + 1
+        attempt_dir = self.generation_dir / f"attempt-{number:04d}"
+        attempt_dir.mkdir(parents=True, exist_ok=False)
         print(
             f"[evolution] candidate attempt {number}/{self.max_attempts}: validating",
             flush=True,
         )
-        self.git.stage()
         patch_path = attempt_dir / "changes.patch"
-        patch_path.write_text(self.git.staged_diff(), encoding="utf-8")
+        patch_path.write_text(patch, encoding="utf-8")
         validation_log = attempt_dir / "validation.log"
         gates_passed, output = run_commands(
             self.validation_commands,
@@ -167,9 +175,13 @@ class CandidateEvaluationSession:
             json.dumps(attempt.to_dict(), indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        return self._feedback(attempt)
+
+    def _feedback(self, attempt: EvaluationAttempt, *, cached: bool = False) -> str:
         report = attempt.report
         feedback = {
             "attempt": attempt.number,
+            "cached": cached,
             "outcome_type": attempt.outcome_type,
             "reason": attempt.reason,
             "attempts_remaining": self.max_attempts - len(self.attempts),
@@ -189,6 +201,12 @@ class CandidateEvaluationSession:
                 "correction remains."
             )
         return json.dumps(feedback, indent=2, ensure_ascii=False)
+
+    def _find_patch(self, patch: str) -> EvaluationAttempt | None:
+        for attempt in reversed(self.attempts):
+            if attempt.patch_path and Path(attempt.patch_path).read_text(encoding="utf-8") == patch:
+                return attempt
+        return None
 
 
 def _last_output(output: str, limit: int = 4000) -> str:
