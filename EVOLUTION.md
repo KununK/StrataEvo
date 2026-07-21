@@ -78,7 +78,7 @@ strataevo \
 --max-score-drop          允许的任务分数下降，默认为 0
 ```
 
-`--mutator-max-steps` 默认是 `30`。该预算与 `--benchmark-max-steps` 相互独立：前者控制
+`--mutator-max-steps` 默认是 `40`，`--benchmark-max-steps` 默认是 `12`。两个预算相互独立：前者控制
 每代修改 StrataEvo 源码的 Agent，后者控制每道评测任务中的 Agent。
 
 ## 自修改过程

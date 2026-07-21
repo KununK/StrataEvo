@@ -16,12 +16,12 @@ class EvolutionConfig:
     generations: int = 1
     model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     base_url: str = "http://localhost:8000/v1"
-    mutator_max_steps: int = 30
+    mutator_max_steps: int = 40
     mutable_paths: list[str] = field(default_factory=lambda: list(DEFAULT_MUTABLE_PATHS))
     eval_limit: int = 5
     eval_offset: int = 0
     eval_workers: int = 4
-    benchmark_max_steps: int = 8
+    benchmark_max_steps: int = 12
     test_timeout: float = 10.0
     step_penalty: float = 0.001
     token_penalty: float = 0.0000001

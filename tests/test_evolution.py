@@ -26,7 +26,9 @@ from tinyagent import AgentResult, Message, Usage
 
 class EvolutionTests(unittest.TestCase):
     def test_mutator_default_reserves_repair_budget(self):
-        self.assertEqual(parse_args([]).mutator_max_steps, 30)
+        args = parse_args([])
+        self.assertEqual(args.mutator_max_steps, 40)
+        self.assertEqual(args.benchmark_max_steps, 12)
 
     def test_self_workspace_can_only_write_evolvable_source(self):
         with tempfile.TemporaryDirectory() as directory:
