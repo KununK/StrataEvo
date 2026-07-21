@@ -110,6 +110,110 @@ class EvolutionTests(unittest.TestCase):
             self.assertTrue(generation.is_dir())
             self.assertEqual(list(generation.iterdir()), [])
 
+    def test_full_score_stops_before_diagnosis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            (source / "agent.py").write_text("VERSION = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "evo")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+
+            run_dir = root / "evolution/runs/test"
+            run_dir.mkdir(parents=True)
+            config = EvolutionConfig(
+                repo=str(root),
+                run_name="test",
+                branch="evo",
+                mutable_paths=["src/tinyagent"],
+            )
+            config_path = run_dir / "config.json"
+            config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+
+            class FullScoreEvaluator:
+                def __init__(self, _repo, _config):
+                    pass
+
+                def evaluate(self, _output_dir):
+                    return EvaluationReport(1.0, 0.99, {}, "baseline", "baseline.log")
+
+            with (
+                patch("strataevo.evolution.cli.HumanEvalEvaluator", FullScoreEvaluator),
+                patch("strataevo.evolution.cli.diagnose_evaluation") as diagnose,
+            ):
+                self.assertEqual(run_one_generation(config_path), 0)
+
+            diagnose.assert_not_called()
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertTrue(state["completed"])
+            self.assertEqual(state["completion_reason"], "task score reached maximum 1.0")
+            self.assertFalse((run_dir / "generation-0001").exists())
+
+    def test_keyboard_interrupt_rolls_back_candidate_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            agent_file = source / "agent.py"
+            agent_file.write_text("VERSION = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "evo")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            commit = self._git_output(root, "rev-parse", "HEAD").strip()
+
+            run_dir = root / "evolution/runs/test"
+            run_dir.mkdir(parents=True)
+            config = EvolutionConfig(
+                repo=str(root),
+                run_name="test",
+                branch="evo",
+                mutable_paths=["src/tinyagent"],
+            )
+            config_path = run_dir / "config.json"
+            config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+            report = EvaluationReport(0.5, 0.49, {}, "parent", "parent.log")
+            (run_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "next_generation": 1,
+                        "current_commit": commit,
+                        "current_report": report.to_dict(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def interrupted_mutation(*_args):
+                agent_file.write_text("VERSION = 1\n", encoding="utf-8")
+                raise KeyboardInterrupt
+
+            with (
+                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch(
+                    "strataevo.evolution.cli.diagnose_evaluation",
+                    return_value=self._diagnosis_report(),
+                ),
+                patch("strataevo.evolution.cli.plan_evolution", return_value=self._plan_report()),
+                patch("strataevo.evolution.cli.mutate", side_effect=interrupted_mutation),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    run_one_generation(config_path)
+
+            self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 0\n")
+            GitRepository(root, ["src/tinyagent"]).ensure_clean()
+            failure = json.loads(
+                (run_dir / "generation-0001/failure.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(failure["error_type"], "KeyboardInterrupt")
+            self.assertEqual(failure["error"], "interrupted by user")
+
     def test_one_generation_commits_an_improved_self_revision(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -317,6 +421,28 @@ class EvolutionTests(unittest.TestCase):
     @staticmethod
     def _read_jsonl(path: Path) -> list[dict]:
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _diagnosis_report() -> DiagnosisReport:
+        return DiagnosisReport(
+            source_dir="parent",
+            input_case_count=1,
+            diagnoses=[
+                Diagnosis(
+                    primary_layer=EvolutionLayer.ARCHITECTURE,
+                    related_layers=[],
+                    problem="test problem",
+                    evidence=["test evidence"],
+                    affected_tasks=["test/1"],
+                    proposed_direction="test direction",
+                    confidence=1.0,
+                )
+            ],
+            input_tokens=0,
+            output_tokens=0,
+            raw_output="{}",
+            attempts=["{}"],
+        )
 
     @staticmethod
     def _plan_report() -> EvolutionPlanReport:

@@ -83,19 +83,32 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(config_path, config.to_dict())
 
     for _ in range(args.generations):
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "strataevo.evolution.cli",
-                "--worker-config",
-                str(config_path),
-            ],
-            cwd=repo,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "strataevo.evolution.cli",
+                    "--worker-config",
+                    str(config_path),
+                ],
+                cwd=repo,
+                check=False,
+            )
+        except KeyboardInterrupt:
+            repository = GitRepository(repo, config.mutable_paths)
+            if repository.changed_paths():
+                repository.rollback()
+            print(
+                "\n[evolution] interrupted; uncommitted self-modifications rolled back",
+                flush=True,
+            )
+            return 130
         if completed.returncode != 0:
             return completed.returncode
+        state_path = run_dir / "state.json"
+        if state_path.is_file() and _read_json(state_path).get("completed", False):
+            break
     return 0
 
 
@@ -112,13 +125,20 @@ def run_one_generation(config_path: Path) -> int:
         raise RuntimeError(f"expected branch {config.branch!r}, found {current_branch!r}")
 
     evaluator = HumanEvalEvaluator(repo, config)
-    commands = validation_commands(repo)
     state = _load_or_create_state(state_path, git, evaluator, run_dir)
+    parent_report = EvaluationReport.from_dict(state["current_report"])
+    if parent_report.task_score >= 1.0:
+        state["completed"] = True
+        state["completion_reason"] = "task score reached maximum 1.0"
+        _write_json(state_path, state)
+        print("[evolution] stopping: pass@1 already reached 1.0000", flush=True)
+        return 0
+
+    commands = validation_commands(repo)
     generation = int(state["next_generation"])
     generation_dir = run_dir / f"generation-{generation:04d}"
     _prepare_generation_dir(generation_dir)
     parent_commit = git.head()
-    parent_report = EvaluationReport.from_dict(state["current_report"])
     diagnosis_path = generation_dir / "diagnosis.json"
     plan_path = generation_dir / "plan.json"
 
@@ -279,6 +299,15 @@ def run_one_generation(config_path: Path) -> int:
         )
         _print_generation(record)
         return 0
+    except KeyboardInterrupt:
+        if git.changed_paths():
+            git.rollback()
+        _write_json(
+            generation_dir / "failure.json",
+            {"error_type": "KeyboardInterrupt", "error": "interrupted by user"},
+        )
+        print("\n[evolution] interrupted; candidate changes rolled back", flush=True)
+        raise
     except Exception as error:
         if git.changed_paths():
             git.rollback()
