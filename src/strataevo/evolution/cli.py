@@ -30,7 +30,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generations", type=int, default=1)
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
-    parser.add_argument("--mutator-max-steps", type=int, default=100)
+    parser.add_argument("--mutator-max-steps", type=int, default=200)
     parser.add_argument("--max-eval-attempts", type=int, default=5)
     parser.add_argument("--eval-limit", type=int, default=5)
     parser.add_argument("--eval-offset", type=int, default=0)

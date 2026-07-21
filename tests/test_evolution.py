@@ -28,7 +28,7 @@ from tinyagent import AgentResult, Message, Usage
 class EvolutionTests(unittest.TestCase):
     def test_mutator_default_reserves_repair_budget(self):
         args = parse_args([])
-        self.assertEqual(args.mutator_max_steps, 100)
+        self.assertEqual(args.mutator_max_steps, 200)
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
 
@@ -70,15 +70,15 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, "evaluation_limit")
 
     def test_round_step_budgets_fit_generation_total(self):
-        remaining = 100
+        remaining = 200
         budgets = []
         for index in range(5):
             budget = _round_step_budget(remaining, 5 - index, first=index == 0)
             budgets.append(budget)
             remaining -= budget
 
-        self.assertEqual(budgets, [30, 18, 18, 17, 17])
-        self.assertEqual(sum(budgets), 100)
+        self.assertEqual(budgets, [60, 35, 35, 35, 35])
+        self.assertEqual(sum(budgets), 200)
 
     def test_self_workspace_can_only_write_evolvable_source(self):
         with tempfile.TemporaryDirectory() as directory:

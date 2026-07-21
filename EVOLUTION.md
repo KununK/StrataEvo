@@ -80,10 +80,10 @@ strataevo \
 --max-score-drop          允许的任务分数下降，默认为 0
 ```
 
-`--mutator-max-steps` 默认是 `100`，`--max-eval-attempts` 默认是 `5`，
+`--mutator-max-steps` 默认是 `200`，`--max-eval-attempts` 默认是 `5`，
 `--benchmark-max-steps` 默认是 `12`。三个预算相互独立：第一个是整代自修改会话共享的
 模型/工具轮数，第二个限制该会话内调用 `evaluate_candidate` 的次数，第三个控制每道评测
-任务中的 Agent。每次 attempt 不会重新获得 100 步；无修改或固定验证失败也会消耗一次
+任务中的 Agent。每次 attempt 不会重新获得 200 步；无修改或固定验证失败也会消耗一次
 attempt，但不会启动 HumanEval。
 
 ## 自修改过程
@@ -109,7 +109,7 @@ Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选
 修正，默认每代最多评测 5 个候选状态。
 
 为避免模型耗尽全部 step 后才尝试评测，控制器还会强制把整代预算划分为连续 refinement
-round。默认 100 steps、5 次评测时，各轮上限依次为 `30/18/18/17/17`。每轮结束后控制器
+round。默认 200 steps、5 次评测时，各轮上限依次为 `60/35/35/35/35`。每轮结束后控制器
 自动评测当前 diff，并把验证或 HumanEval 结果追加到同一个 session 后再启动下一轮；模型
 主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
 
