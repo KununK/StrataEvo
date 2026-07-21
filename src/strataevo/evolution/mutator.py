@@ -28,6 +28,8 @@ model integration, and self-evolution logic. The evaluator and tests are an exte
 environment and are intentionally read-only. Do not optimize by weakening tests or fabricating
 results. Keep interfaces compatible, run validation, and stop after producing a focused diff."""
 
+MUTATOR_CONTEXT_LIMIT_CHARS = 60_000
+
 
 def mutate(
     repo: Path,
@@ -53,6 +55,7 @@ def mutate(
         tools=ToolRegistry(workspace.tools()),
         system_prompt=SYSTEM_PROMPT,
         max_steps=config.mutator_max_steps,
+        context_limit_chars=MUTATOR_CONTEXT_LIMIT_CHARS,
         approval=allow_all,
         session_store=SessionStore(generation_dir / "sessions"),
     )

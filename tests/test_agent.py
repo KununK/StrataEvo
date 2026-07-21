@@ -157,6 +157,36 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(second_request[-2].tool_calls[0].id, second_request[-1].tool_call_id)
         self.assertEqual(result.output, "done")
 
+    def test_compaction_counts_tool_arguments_in_single_user_loop(self):
+        model = ScriptedModel(
+            [
+                Message(
+                    "assistant",
+                    tool_calls=[ToolCall("old", "missing", {"content": "x" * 600})],
+                ),
+                Message(
+                    "assistant",
+                    tool_calls=[ToolCall("new", "missing", {"content": "y" * 600})],
+                ),
+                Message("assistant", "done"),
+            ]
+        )
+        agent = Agent(model, context_limit_chars=900)
+
+        result = agent.run("one long tool-driven task")
+
+        third_request = model.requests[2]
+        call_ids = [
+            call.id for message in third_request for call in message.tool_calls
+        ]
+        self.assertNotIn("old", call_ids)
+        self.assertIn("new", call_ids)
+        self.assertEqual(
+            [message.role for message in third_request[-2:]], ["assistant", "tool"]
+        )
+        self.assertEqual(third_request[-2].tool_calls[0].id, third_request[-1].tool_call_id)
+        self.assertEqual(result.output, "done")
+
     def test_agent_rejects_non_positive_limits(self):
         with self.assertRaises(ValueError):
             Agent(ScriptedModel([]), max_steps=0)

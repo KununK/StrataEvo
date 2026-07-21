@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass, field
 
@@ -124,19 +125,82 @@ class Agent:
         return result
 
     def _compact(self, messages: list[Message]) -> list[Message]:
-        """Drop complete old turns without breaking model/tool message groups."""
-        size = sum(len(message.content) for message in messages)
-        if size <= self.context_limit_chars or len(messages) <= 4:
+        """Drop old complete tool groups while preserving the current task."""
+        if _messages_size(messages) <= self.context_limit_chars:
             return messages
-        # A user message starts a turn. Keeping the latest complete turn ensures
-        # every assistant tool call stays adjacent to all of its tool results.
         user_positions = [index for index, message in enumerate(messages) if message.role == "user"]
-        if len(user_positions) < 2:
+        if not user_positions:
             return messages
-        keep_from = user_positions[-1]
-        system, tail = messages[0], messages[keep_from:]
-        removed = messages[1:keep_from]
-        summary = "Earlier context omitted:\n" + "\n".join(
-            f"{message.role}: {message.content[:300]}" for message in removed if message.content
+
+        latest_user = user_positions[-1]
+        system = messages[0] if messages[0].role == "system" else None
+        older = messages[1:latest_user] if system else messages[:latest_user]
+        current_groups = _message_groups(messages[latest_user + 1 :])
+
+        fixed = ([system] if system else []) + [messages[latest_user]]
+        fixed_size = _messages_size(fixed)
+        summary_reserve = min(8_000, self.context_limit_chars // 5)
+        kept_groups: list[list[Message]] = []
+        kept_size = 0
+
+        # Keep the newest complete assistant/tool group even when that group alone
+        # is large. A tool result without its initiating assistant call is invalid.
+        for group in reversed(current_groups):
+            group_size = _messages_size(group)
+            if kept_groups and fixed_size + kept_size + group_size + summary_reserve > (
+                self.context_limit_chars
+            ):
+                break
+            kept_groups.insert(0, group)
+            kept_size += group_size
+
+        removed_groups = current_groups[: len(current_groups) - len(kept_groups)]
+        removed = [*older, *(message for group in removed_groups for message in group)]
+        kept = [message for group in kept_groups for message in group]
+        compacted = ([system] if system else [])
+
+        available = self.context_limit_chars - fixed_size - kept_size
+        if removed and available > 100:
+            summary = _summarize_messages(removed)
+            summary = summary[: min(summary_reserve, max(0, available - 100))]
+            if summary:
+                compacted.append(Message("system", summary))
+
+        return [*compacted, messages[latest_user], *kept]
+
+
+def _messages_size(messages: list[Message]) -> int:
+    return sum(
+        len(
+            json.dumps(
+                message.to_dict(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
         )
-        return [system, Message("system", summary[-self.context_limit_chars // 2 :]), *tail]
+        for message in messages
+    )
+
+
+def _message_groups(messages: list[Message]) -> list[list[Message]]:
+    """Group each assistant call with all tool results that immediately follow it."""
+    groups: list[list[Message]] = []
+    for message in messages:
+        if message.role == "assistant" or not groups:
+            groups.append([message])
+        else:
+            groups[-1].append(message)
+    return groups
+
+
+def _summarize_messages(messages: list[Message]) -> str:
+    excerpts = []
+    for message in messages:
+        details = message.content[:300].replace("\n", " ")
+        if message.tool_calls:
+            names = ", ".join(call.name for call in message.tool_calls)
+            details = f"tool calls: {names}" + (f"; {details}" if details else "")
+        label = f"{message.role}/{message.name}" if message.name else message.role
+        excerpts.append(f"{label}: {details}".rstrip())
+    return "Earlier context omitted:\n" + "\n".join(excerpts)
