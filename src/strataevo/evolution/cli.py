@@ -130,6 +130,7 @@ def run_one_generation(config_path: Path) -> int:
         raise RuntimeError(f"expected branch {config.branch!r}, found {current_branch!r}")
 
     evaluator = HumanEvalEvaluator(repo, config)
+    _write_json(run_dir / "evaluation_contract.json", evaluator.contract.to_dict())
     state = _load_or_create_state(state_path, git, evaluator, run_dir)
     parent_report = EvaluationReport.from_dict(state["current_report"])
     if parent_report.task_score >= 1.0:
@@ -161,6 +162,7 @@ def run_one_generation(config_path: Path) -> int:
             parent_report,
             planning_history,
             plan_path,
+            evaluator.contract,
         )
         selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
         mutation_layers = {
@@ -187,6 +189,7 @@ def run_one_generation(config_path: Path) -> int:
             mutation_history,
             generation_dir,
             commands,
+            evaluator.contract,
             candidate_session.evaluate,
         )
         _write_json(
@@ -232,6 +235,7 @@ def run_one_generation(config_path: Path) -> int:
                 plan_report,
                 parent_report,
                 None,
+                None,
                 agent_result,
                 attempts,
             )
@@ -250,8 +254,17 @@ def run_one_generation(config_path: Path) -> int:
 
         changed_paths = best_attempt.changed_paths
         patch_path = Path(best_attempt.patch_path) if best_attempt.patch_path else None
-        candidate_report = EvaluationReport.from_dict(best_attempt.report)
-        accepted, reason = _promotion_decision(parent_report, candidate_report)
+        selection_report = EvaluationReport.from_dict(best_attempt.report)
+        eligible, reason = _promotion_decision(parent_report, selection_report)
+        promotion_parent_report: EvaluationReport | None = None
+        candidate_report = selection_report
+        if eligible:
+            promotion_parent_report, candidate_report = candidate_session.confirm(best_attempt)
+            accepted, reason = _promotion_decision(promotion_parent_report, candidate_report)
+            reason = f"fresh promotion comparison: {reason}"
+        else:
+            accepted = False
+            reason = f"candidate screening: {reason}"
         if accepted:
             resulting_commit = git.commit(
                 f"evolve: generation {generation} pass@1 {candidate_report.task_score:.6f}"
@@ -277,6 +290,7 @@ def run_one_generation(config_path: Path) -> int:
             plan_path,
             plan_report,
             parent_report,
+            promotion_parent_report,
             candidate_report,
             agent_result,
             attempts,
@@ -359,6 +373,7 @@ def _record(
     plan_path: Path,
     plan_report: EvolutionPlanReport,
     parent_report: EvaluationReport,
+    promotion_parent_report: EvaluationReport | None,
     candidate_report: EvaluationReport | None,
     agent_result: Any,
     evaluation_attempts: list[dict[str, Any]],
@@ -380,6 +395,9 @@ def _record(
         planned_layer=plan_report.plan.primary_layer.value,
         plan_hypothesis=plan_report.plan.hypothesis,
         parent_report=parent_report.to_dict(),
+        promotion_parent_report=(
+            promotion_parent_report.to_dict() if promotion_parent_report else None
+        ),
         candidate_report=candidate_report.to_dict() if candidate_report else None,
         agent_stop_reason=agent_result.stop_reason,
         agent_steps=agent_result.steps,

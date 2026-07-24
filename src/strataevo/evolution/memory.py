@@ -127,6 +127,9 @@ class EvolutionMemoryEntry:
             "no_change",
             "validation_failed",
             "evaluation_failed",
+            "deferred_change",
+            "mixed_change_scope",
+            "unclassified_change",
             "benchmark_rejected",
         }:
             raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
@@ -142,7 +145,7 @@ class EvolutionMemoryEntry:
     ) -> EvolutionMemoryEntry:
         from .plan import observe_expected_outcomes
 
-        parent = record.parent_report
+        parent = record.promotion_parent_report or record.parent_report
         candidate = record.candidate_report
         parent_utility = float(parent["utility"])
         candidate_utility = float(candidate["utility"]) if candidate else None
@@ -160,7 +163,7 @@ class EvolutionMemoryEntry:
             diagnoses=[MemoryDiagnosis.from_dict(item.to_dict()) for item in diagnosis.diagnoses],
             plan=plan_report.plan.to_dict(),
             outcome_observations=observe_expected_outcomes(
-                plan_report.plan, record.parent_report, record.candidate_report
+                plan_report.plan, parent, record.candidate_report
             ),
             changed_paths=list(record.changed_paths),
             patch_path=record.patch_path,

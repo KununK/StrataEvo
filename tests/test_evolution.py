@@ -12,6 +12,7 @@ from strataevo.evolution.cli import (
     parse_args,
     run_one_generation,
 )
+from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
 from strataevo.evolution.mutator import _round_step_budget, _run_refinement_session
@@ -24,6 +25,13 @@ from strataevo.evolution.plan import (
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from strataevo.evolution.workspace import SelfWorkspace
 from tinyagent import AgentResult, Message, Usage
+
+TEST_CONTRACT = EvaluationContract(
+    benchmark="test",
+    objective="test direct agent behavior",
+    direct_paths=("src/tinyagent",),
+    deferred_paths=("src/strataevo/evolution/mutator.py",),
+)
 
 
 class EvolutionTests(unittest.TestCase):
@@ -162,6 +170,8 @@ class EvolutionTests(unittest.TestCase):
             self._git(root, "commit", "-m", "baseline")
 
             class FakeEvaluator:
+                contract = TEST_CONTRACT
+
                 def evaluate(self, _output_dir):
                     return EvaluationReport(0.6, 0.6, {}, "candidate", "candidate.log")
 
@@ -218,6 +228,8 @@ class EvolutionTests(unittest.TestCase):
             )
 
             class FakeEvaluator:
+                contract = TEST_CONTRACT
+
                 def evaluate(self, _output_dir):
                     return next(reports)
 
@@ -289,6 +301,8 @@ class EvolutionTests(unittest.TestCase):
             config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
 
             class FullScoreEvaluator:
+                contract = TEST_CONTRACT
+
                 def __init__(self, _repo, _config):
                     pass
 
@@ -397,10 +411,14 @@ class EvolutionTests(unittest.TestCase):
                 [
                     EvaluationReport(0.5, 0.49, {}, "parent", "parent.log"),
                     EvaluationReport(0.6, 0.495, {}, "child", "child.log"),
+                    EvaluationReport(0.5, 0.49, {}, "fresh-parent", "fresh-parent.log"),
+                    EvaluationReport(0.6, 0.495, {}, "confirmed-child", "confirmed-child.log"),
                 ]
             )
 
             class FakeEvaluator:
+                contract = TEST_CONTRACT
+
                 def __init__(self, _repo, _config):
                     pass
 
@@ -438,6 +456,7 @@ class EvolutionTests(unittest.TestCase):
                 _history,
                 _directory,
                 _commands,
+                _contract,
                 evaluate_candidate,
             ):
                 agent_file.write_text("VERSION = 1\n", encoding="utf-8")
@@ -504,10 +523,14 @@ class EvolutionTests(unittest.TestCase):
                     EvaluationReport(0.5, 0.49, {}, "parent", "parent.log"),
                     EvaluationReport(0.7, 0.69, {}, "first", "first.log"),
                     EvaluationReport(0.6, 0.59, {}, "second", "second.log"),
+                    EvaluationReport(0.5, 0.49, {}, "fresh-parent", "fresh-parent.log"),
+                    EvaluationReport(0.65, 0.64, {}, "confirmed-child", "confirmed-child.log"),
                 ]
             )
 
             class FakeEvaluator:
+                contract = TEST_CONTRACT
+
                 def __init__(self, _repo, _config):
                     pass
 
@@ -544,7 +567,8 @@ class EvolutionTests(unittest.TestCase):
             record = json.loads(
                 (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(record["candidate_report"]["task_score"], 0.7)
+            self.assertEqual(record["candidate_report"]["task_score"], 0.65)
+            self.assertEqual(record["promotion_parent_report"]["task_score"], 0.5)
             self.assertEqual(len(record["evaluation_attempts"]), 2)
             self.assertEqual(
                 [item["report"]["task_score"] for item in record["evaluation_attempts"]],

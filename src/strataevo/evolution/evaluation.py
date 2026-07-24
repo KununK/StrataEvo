@@ -6,9 +6,17 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Protocol
 
+from .contract import EvaluationContract
 from .evidence import HumanEvalEvidenceCollector
 from .types import EvaluationReport, EvolutionConfig
+
+
+class Evaluator(Protocol):
+    contract: EvaluationContract
+
+    def evaluate(self, output_dir: Path) -> EvaluationReport: ...
 
 
 def validation_commands(repo: Path) -> list[list[str]]:
@@ -57,6 +65,12 @@ class HumanEvalEvaluator:
     def __init__(self, repo: Path, config: EvolutionConfig) -> None:
         self.repo = repo
         self.config = config
+        self.contract = EvaluationContract(
+            benchmark="HumanEval",
+            objective="Improve the task-solving Tinyagent measured by HumanEval pass@1.",
+            direct_paths=("src/tinyagent",),
+            deferred_paths=("src/strataevo/evolution/mutator.py",),
+        )
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:
         print(f"[evolution] evaluating agent -> {output_dir}", flush=True)
@@ -103,6 +117,7 @@ class HumanEvalEvaluator:
         metrics["utility"] = utility
         metrics["evidence_path"] = str(output_dir / "evidence.json")
         metrics["evidence_signal_counts"] = evidence.signal_counts
+        metrics["evaluation_contract"] = self.contract.to_dict()
         print(
             f"[evolution] pass@1={task_score:.4f} utility={utility:.6f}",
             flush=True,

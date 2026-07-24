@@ -70,6 +70,7 @@ class GenerationRecord:
     planned_layer: str
     plan_hypothesis: str
     parent_report: dict[str, Any]
+    promotion_parent_report: dict[str, Any] | None
     candidate_report: dict[str, Any] | None
     agent_stop_reason: str
     agent_steps: int

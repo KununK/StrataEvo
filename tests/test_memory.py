@@ -36,6 +36,20 @@ class EvolutionMemoryTests(unittest.TestCase):
 
             self.assertEqual([entry.generation for entry in selected], [1, 3])
 
+    def test_contract_mismatches_remain_loadable_evidence(self):
+        for outcome in (
+            "deferred_change",
+            "mixed_change_scope",
+            "unclassified_change",
+        ):
+            with self.subTest(outcome=outcome):
+                data = self._entry(1, "architecture", "rejected").to_dict()
+                data["outcome_type"] = outcome
+
+                loaded = EvolutionMemoryEntry.from_dict(data)
+
+                self.assertEqual(loaded.outcome_type, outcome)
+
     @staticmethod
     def _entry(
         generation: int,

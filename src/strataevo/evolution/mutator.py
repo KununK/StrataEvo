@@ -16,18 +16,17 @@ from tinyagent import (
     allow_all,
 )
 
+from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport
 from .memory import EvolutionMemoryEntry, memory_context
 from .plan import EvolutionPlanReport
 from .types import EvaluationReport, EvolutionConfig
 from .workspace import SelfWorkspace
 
-SYSTEM_PROMPT = """You are StrataEvo, a recursively self-improving software agent.
-You are editing the source code that will implement your next generation. Inspect the
-repository and evaluation evidence, identify one concrete limitation, and make one coherent
-improvement. You may change any file exposed as evolvable, including your agent loop, tools,
-model integration, and self-evolution logic. The evaluator and tests are an external
-environment and are intentionally read-only. Do not optimize by weakening tests or fabricating
+SYSTEM_PROMPT = """You are StrataEvo, a self-improving software agent.
+Improve the task-solving Agent measured by the active evaluation contract. Inspect the repository
+and evaluation evidence, identify one concrete limitation, and make one coherent improvement.
+The evaluator and tests are a read-only external environment. Never weaken them or fabricate
 results. Keep interfaces compatible, run validation, and stop after producing a focused diff."""
 
 MUTATOR_CONTEXT_LIMIT_CHARS = 60_000
@@ -43,6 +42,7 @@ def mutate(
     history: list[EvolutionMemoryEntry],
     generation_dir: Path,
     commands: list[list[str]],
+    evaluation_contract: EvaluationContract,
     evaluate_candidate: Callable[[], str],
 ) -> AgentResult:
     print(f"[evolution] generation {generation}: inspecting and rewriting self", flush=True)
@@ -73,6 +73,7 @@ def mutate(
     evolution_plan = json.dumps(plan_report.plan.to_dict(), indent=2, ensure_ascii=False)
     prior_evolution = json.dumps(memory_context(history), indent=2, ensure_ascii=False)
     mutable_paths = json.dumps(config.mutable_paths, ensure_ascii=False)
+    contract = json.dumps(evaluation_contract.to_dict(), indent=2, ensure_ascii=False)
     prompt = f"""Create generation {generation} by improving your own implementation.
 
 Current evaluation report:
@@ -87,11 +88,17 @@ Selected diagnosis:
 Evolution plan:
 {evolution_plan}
 
+Active evaluation contract:
+{contract}
+
 Relevant prior evolution outcomes:
 {prior_evolution}
 
 Execution constraints:
 - Writable paths: {mutable_paths}
+- Only a patch confined to evaluation_contract.direct_paths can be scored by this benchmark.
+  deferred_paths remain inspectable and writable for future research, but changing them now is not
+  evidence of task-Agent improvement. Do not mix direct and deferred changes in one candidate.
 - Total model/tool steps available: {config.mutator_max_steps}
 - Refinement rounds available: {config.mutator_rounds}
 - Candidate benchmark evaluations available: {config.max_eval_attempts}

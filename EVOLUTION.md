@@ -9,8 +9,10 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
   -> Diagnosis 判断主要演化层
   -> Evolution Plan 选择一项可检验的干预
   -> 自修改执行器修改自身源码
-  -> [固定检查 -> 评测候选 -> 根据反馈继续修改]，最多 5 次
-  -> 恢复本代最佳候选并提交，或整体回滚
+  -> Evaluation Contract 检查修改能否被当前 benchmark 观察
+  -> [固定检查 -> 探索性评测 -> 根据反馈继续修改]，最多 5 次
+  -> 恢复探索阶段最佳候选
+  -> 重新评测父代和候选，确认提升后提交，否则整体回滚
   -> 将接受或拒绝的结果写入 Evolution Memory
   -> 在新的 Python 进程中启动下一代
 ```
@@ -27,7 +29,7 @@ src/tinyagent/
 src/strataevo/evolution/mutator.py
 ```
 
-这包括完整的 Tinyagent 运行时，以及负责决定如何改进 Agent 的 Meta-Agent 策略。
+这包括完整的 Tinyagent 运行时，以及负责决定如何改进 Agent 的自修改策略。
 以下环境保持固定：
 
 ```text
@@ -41,6 +43,28 @@ src/strataevo/evolution/git.py  Git 提交和回滚
 ```
 
 如果不保留这条边界，Agent 就可能通过修改评测器提高报告分数，而不是真正提升自身能力。
+
+## Evaluation Contract
+
+可写不代表可以被当前 benchmark 评价。每个 Evaluator 必须声明一份 Evaluation Contract，
+说明当前目标以及代码修改的生效范围。HumanEval 当前声明：
+
+```text
+direct_paths
+  src/tinyagent/
+  HumanEval 子进程会加载，能够用本轮 pass@1 评价
+
+deferred_paths
+  src/strataevo/evolution/mutator.py
+  只会改变后续自修改过程，本轮 HumanEval 不会加载
+```
+
+候选只有全部修改都位于 `direct_paths` 时才会进入当前 benchmark。仅修改
+`deferred_paths`、混合修改两个范围或者包含未分类路径的候选，都会返回结构化反馈、恢复
+父代或已有最佳候选，并且不消耗探索性 benchmark 配额。`mutator.py` 仍然保留在可演化
+范围，但需要未来独立的 Evolver 评测契约验证，不能用即时 HumanEval 波动证明其改进。
+
+每次运行使用的契约保存在 `evolution/runs/<run_name>/evaluation_contract.json`。
 
 ## 启动演化
 
@@ -84,7 +108,8 @@ strataevo \
 `--mutator-max-steps` 默认是 `200`，`--mutator-rounds` 和 `--max-eval-attempts` 默认都是
 `5`，`--benchmark-max-steps` 默认是 `12`。四个预算相互独立：它们依次控制整代自修改
 总步数、连续反馈轮数、候选 benchmark 次数，以及每道评测任务中的 Agent 步数。无修改或
-固定验证失败会留下 attempt 记录，但不占用 benchmark 次数。
+固定验证失败和不符合 Evaluation Contract 的修改会留下 attempt 记录，但不占用探索性
+benchmark 次数。最终父代重测和候选确认是独立的晋级检查，不计入该配额。
 
 ## 自修改过程
 
@@ -121,9 +146,12 @@ evolution/runs/<run_name>/generation-NNNN/attempt-NNNN/
 ```
 
 候选 benchmark 未超过父代或本代已有最佳候选时，控制器立即恢复父代或最佳 patch，再让
-模型继续修改。一代结束时，控制器丢弃最后遗留的未评测修改，并恢复 pass@1 最高的已评测
-patch。只有该最佳候选严格超过父代才会提交；否则整个工作区回滚。baseline 和 validation
-失败都不计入 `--max-eval-attempts`。
+模型继续修改。一代结束时，控制器丢弃最后遗留的未评测修改，并恢复探索阶段 pass@1 最高的
+已评测 patch。探索最高分只用于选择候选，不直接决定提交。
+
+如果探索最高分超过已有父代记录，控制器会先恢复父代并重新评测，再恢复候选并进行一次确认
+评测。只有候选在这组没有参与候选筛选的新结果中仍严格超过父代才会提交。这样保留代内多
+round 反馈，同时避免从多次随机生成中直接选择最高值造成的 best-of-N 晋级偏差。
 
 `replace_text` 只接受恰好出现一次的原文；一次精确匹配失败后，应重新读取相关行并改用
 `replace_lines`，避免反复猜测空格。自修改提示要求在前三分之一预算内开始编辑，并保留
@@ -142,8 +170,10 @@ utility = pass@1
 
 一个新版本只有同时满足以下条件才会被提交：
 
-1. Ruff、pytest 和自进化 CLI 启动检查全部通过；
-2. pass@1 严格高于父代。
+1. 修改仅位于当前 Evaluation Contract 的 `direct_paths`；
+2. Ruff、pytest 和自进化 CLI 启动检查全部通过；
+3. 探索阶段选出的最佳候选超过已有父代记录；
+4. 新鲜的候选确认 pass@1 严格高于新鲜的父代重测 pass@1。
 
 效用及其组成指标不参与当前的接受或拒绝决策。pass@1 相同的候选即使成本更低也不会晋级。
 如果 baseline 或已接受父代的 pass@1 已达到 `1.0`，运行会在 Diagnosis 和自修改之前提前
@@ -178,6 +208,7 @@ Python 模块加载后，修改磁盘源码不会自动改变当前进程中已�
 ```text
 evolution/runs/<run_name>/
 ├── config.json
+├── evaluation_contract.json
 ├── state.json
 ├── evolution_memory.jsonl
 ├── baseline/
@@ -195,6 +226,10 @@ evolution/runs/<run_name>/
 │   │       └── evidence.json
 │   ├── attempt-0002/
 │   │   └── ...
+│   ├── promotion/
+│   │   ├── comparison.json
+│   │   ├── parent/evaluation/
+│   │   └── candidate/evaluation/
 │   └── sessions/
 └── generation-0002-failed-0001/
     └── failure.json
@@ -203,13 +238,15 @@ evolution/runs/<run_name>/
 各文件含义：
 
 - `config.json`：本次演化实验的固定配置；
+- `evaluation_contract.json`：当前 benchmark 的目标、直接生效路径和延迟生效路径；
 - `state.json`：当前代数、当前提交和父代评分；
 - `evolution_memory.jsonl`：所有已完成代的诊断、修改、指标和接受/拒绝结果；
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
 - `plan.json`：从诊断中选中的单一问题、干预、预期指标和长期价值假设；
-- `agent_result.json`：Meta-Agent 的完整消息与工具轨迹；
+- `agent_result.json`：自修改 Agent 的完整消息与工具轨迹；
 - `attempt-NNNN/changes.patch`：该次候选对自身源码的累计修改；
 - `attempt-NNNN/attempt.json`：该次验证、评测状态和报告；
+- `promotion/comparison.json`：探索最佳结果、新鲜父代结果和候选确认结果；
 - `record.json`：父代、本代最佳候选、全部 attempts、晋级决定和原因；
 - `attempt-NNNN/validation.log`：Ruff、pytest 和 CLI 检查输出；
 - `attempt-NNNN/evaluation/`：该候选的 HumanEval 代码、session 和结果；
@@ -319,11 +356,15 @@ accepted / rejected、原因和 resulting commit
 ```text
 no_change          自修改执行没有产生源码 diff，尚未检验演化假设
 validation_failed  产生了 diff，但固定代码检查失败，尚未进入任务评测
+deferred_change    修改只会影响后续自进化，当前 benchmark 无法评价
+mixed_change_scope 同时修改直接与延迟生效代码，无法归因
+unclassified_change 包含 Evaluation Contract 未声明的修改路径
 benchmark_rejected 通过固定检查，但任务评测没有满足晋级条件
 accepted           通过固定检查和任务评测并已提交
 ```
 
-Planner 会把前两类视为执行失败，而不是该演化方向已经被基准否定。
+Planner 会把没有进入 benchmark 的结果视为执行或评测契约不匹配，而不是该演化方向已经被
+基准否定。
 
 Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复提出已被拒绝的假设。自修改
 执行器会优先读取与本次主要层或关联层匹配的历史，同时补充最近的其他记录。历史只作为

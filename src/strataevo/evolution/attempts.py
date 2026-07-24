@@ -5,15 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
 
-from .evaluation import run_commands
+from .contract import ChangeImpact
+from .evaluation import Evaluator, run_commands
 from .git import GitRepository
 from .types import EvaluationReport
-
-
-class Evaluator(Protocol):
-    def evaluate(self, output_dir: Path) -> EvaluationReport: ...
 
 
 @dataclass(slots=True)
@@ -25,6 +21,7 @@ class EvaluationAttempt:
     patch_path: str | None
     validation_log: str | None
     report: dict | None
+    change_impact: dict | None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,6 +81,7 @@ class CandidateEvaluationSession:
                 None,
                 None,
                 None,
+                None,
             )
             return self._finish_attempt(attempt)
 
@@ -98,12 +96,29 @@ class CandidateEvaluationSession:
         number = len(self.attempts) + 1
         attempt_dir = self.generation_dir / f"attempt-{number:04d}"
         attempt_dir.mkdir(parents=True, exist_ok=False)
+        patch_path = attempt_dir / "changes.patch"
+        patch_path.write_text(patch, encoding="utf-8")
+        impact = self.evaluator.contract.classify(changed_paths)
+        scope_error = _scope_error(impact)
+        if scope_error:
+            attempt = EvaluationAttempt(
+                number,
+                scope_error[0],
+                scope_error[1],
+                changed_paths,
+                str(patch_path),
+                None,
+                None,
+                impact.to_dict(),
+            )
+            feedback = self._finish_attempt(attempt)
+            self._restore(self._best_improving_attempt())
+            return feedback
+
         print(
             f"[evolution] candidate check {number}: validating",
             flush=True,
         )
-        patch_path = attempt_dir / "changes.patch"
-        patch_path.write_text(patch, encoding="utf-8")
         validation_log = attempt_dir / "validation.log"
         gates_passed, output = run_commands(
             self.validation_commands,
@@ -120,6 +135,7 @@ class CandidateEvaluationSession:
                 str(patch_path),
                 str(validation_log),
                 None,
+                impact.to_dict(),
             )
             return self._finish_attempt(attempt)
 
@@ -139,6 +155,7 @@ class CandidateEvaluationSession:
                 str(patch_path),
                 str(validation_log),
                 None,
+                impact.to_dict(),
             )
             return self._finish_attempt(attempt)
         previous_best = self._best_attempt()
@@ -163,6 +180,7 @@ class CandidateEvaluationSession:
             str(patch_path),
             str(validation_log),
             report.to_dict(),
+            impact.to_dict(),
         )
         feedback = self._finish_attempt(attempt)
         if regressed:
@@ -184,6 +202,35 @@ class CandidateEvaluationSession:
         best = self._best_attempt()
         self._restore(best)
         return best
+
+    def confirm(
+        self, attempt: EvaluationAttempt
+    ) -> tuple[EvaluationReport, EvaluationReport]:
+        """Compare parent and selected candidate on fresh, unselected benchmark runs."""
+        if not attempt.patch_path or attempt.report is None:
+            raise ValueError("only an evaluated candidate can be confirmed")
+        promotion_dir = self.generation_dir / "promotion"
+        promotion_dir.mkdir(parents=True, exist_ok=False)
+        print("[evolution] promotion check: re-evaluating parent", flush=True)
+        self._restore(None)
+        parent = self.evaluator.evaluate(promotion_dir / "parent" / "evaluation")
+        print("[evolution] promotion check: confirming candidate", flush=True)
+        self._restore(attempt)
+        candidate = self.evaluator.evaluate(promotion_dir / "candidate" / "evaluation")
+        (promotion_dir / "comparison.json").write_text(
+            json.dumps(
+                {
+                    "selection_report": attempt.report,
+                    "parent_report": parent.to_dict(),
+                    "candidate_report": candidate.to_dict(),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return parent, candidate
 
     def to_dicts(self) -> list[dict]:
         return [attempt.to_dict() for attempt in self.attempts]
@@ -211,8 +258,18 @@ class CandidateEvaluationSession:
             "candidate_utility": report["utility"] if report else None,
             "evidence_path": report["metrics"].get("evidence_path") if report else None,
             "signal_counts": report["metrics"].get("evidence_signal_counts") if report else None,
+            "change_impact": attempt.change_impact,
         }
-        if report and float(report["task_score"]) >= 1.0:
+        if attempt.outcome_type in {
+            "deferred_change",
+            "mixed_change_scope",
+            "unclassified_change",
+        }:
+            feedback["instruction"] = (
+                "This patch cannot be attributed to the active benchmark. Make one focused change "
+                "only under its direct_paths, or stop."
+            )
+        elif report and float(report["task_score"]) >= 1.0:
             feedback["instruction"] = "Maximum task score reached; stop editing."
         elif self.evaluations_used >= self.max_evaluations:
             feedback["instruction"] = "Evaluation budget exhausted; stop editing."
@@ -253,3 +310,22 @@ class CandidateEvaluationSession:
 def _last_output(output: str, limit: int = 4000) -> str:
     text = output.strip()
     return text[-limit:] if text else "fixed validation commands failed"
+
+
+def _scope_error(impact: ChangeImpact) -> tuple[str, str] | None:
+    if impact.unclassified_paths:
+        return (
+            "unclassified_change",
+            "the evaluation contract does not classify every changed path",
+        )
+    if impact.direct_paths and impact.deferred_paths:
+        return (
+            "mixed_change_scope",
+            "patch mixes code used by this benchmark with code that only affects later generations",
+        )
+    if impact.deferred_paths:
+        return (
+            "deferred_change",
+            "changed code is not loaded by this benchmark and cannot receive its task score",
+        )
+    return None

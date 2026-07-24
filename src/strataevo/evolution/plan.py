@@ -10,6 +10,7 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel
 
+from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport, EvolutionLayer
 from .memory import EvolutionMemoryEntry, memory_context
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig
@@ -168,6 +169,7 @@ class EvolutionPlanner:
         *,
         mutable_paths: list[str] | None = None,
         existing_files: list[str] | None = None,
+        evaluation_contract: EvaluationContract | None = None,
     ) -> EvolutionPlanReport:
         mutable_paths = list(mutable_paths or DEFAULT_MUTABLE_PATHS)
         available_metrics = evaluation_metrics(parent_report.to_dict())
@@ -178,6 +180,9 @@ class EvolutionPlanner:
                 "mutable_paths": mutable_paths,
                 "existing_mutable_files": existing_files or [],
             },
+            "evaluation_contract": (
+                evaluation_contract.to_dict() if evaluation_contract is not None else None
+            ),
             "prior_evolution": memory_context(history or []),
         }
         messages = [
@@ -238,6 +243,9 @@ regressing task quality. A rejected prior attempt does not prove the whole direc
 but repeating the same intervention requires new evidence or a materially different mechanism.
 Treat prior outcome_type=no_change or validation_failed as an execution failure, not benchmark
 evidence against its hypothesis. Use those records to choose a more executable intervention.
+Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluation-contract
+mismatch: the intervention was not tested by the benchmark and must not be interpreted as a
+negative task result.
 
 Some changes may enable future improvements without helping the current benchmark immediately.
 Record that possibility in expected_long_term_value and prerequisites, but do not use speculative
@@ -245,6 +253,11 @@ future value as proof of current benefit. Every plan must still have one or more
 now using only names from available_metrics. Every likely_files entry must be an existing file from
 repository.existing_mutable_files or a plausible new file below repository.mutable_paths. These
 paths guide the mutation but do not narrow its configured write permissions.
+
+The evaluation_contract is authoritative when present. Its direct_paths are loaded by the active
+benchmark and can be evaluated now. Its deferred_paths affect later evolution but are not loaded by
+the active benchmark. Plan only a change under direct_paths. Never claim that a deferred change is
+validated by an immediate benchmark score.
 
 Return exactly this JSON object:
 {
@@ -272,8 +285,14 @@ def plan_evolution(
     parent_report: EvaluationReport,
     history: list[EvolutionMemoryEntry],
     destination: str | Path,
+    evaluation_contract: EvaluationContract | None = None,
 ) -> EvolutionPlanReport:
-    existing_files = mutable_source_files(config.repo, config.mutable_paths)
+    eligible_paths = (
+        list(evaluation_contract.direct_paths)
+        if evaluation_contract is not None
+        else config.mutable_paths
+    )
+    existing_files = mutable_source_files(config.repo, eligible_paths)
     model = OpenAICompatibleModel(
         model=config.model,
         base_url=config.base_url,
@@ -284,8 +303,9 @@ def plan_evolution(
         diagnosis,
         parent_report,
         history,
-        mutable_paths=config.mutable_paths,
+        mutable_paths=eligible_paths,
         existing_files=existing_files,
+        evaluation_contract=evaluation_contract,
     )
     _write_json(Path(destination), report.to_dict())
     return report
