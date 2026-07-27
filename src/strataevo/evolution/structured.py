@@ -9,6 +9,8 @@ from typing import Any
 
 from tinyagent import Message, Model
 
+JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
+
 
 @dataclass(slots=True)
 class StructuredResponse[T]:
@@ -64,7 +66,11 @@ def request_json[T](
     output_tokens = 0
     current_messages = list(messages)
     for attempt_number in range(repair_retries + 1):
-        response = model.complete(current_messages, [])
+        response = model.complete(
+            current_messages,
+            [],
+            response_format=JSON_OBJECT_RESPONSE_FORMAT,
+        )
         raw_output = response.message.content
         attempts.append(raw_output)
         input_tokens += response.usage.input_tokens

@@ -127,10 +127,8 @@ class EvidenceDiagnoser:
                 "requires_strict_improvement": True,
             },
             "cases": [_compact_case(case) for case in cases],
-            "change_effects": (
-                evaluation_contract.to_dict()["change_effects"]
-                if evaluation_contract is not None
-                else []
+            "evaluation_contract": (
+                evaluation_contract.to_dict() if evaluation_contract is not None else None
             ),
             "prior_evolution": memory_context(history or []),
         }

@@ -20,7 +20,11 @@ class Model(Protocol):
     """Anything that turns conversation history into one assistant message."""
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        *,
+        response_format: dict[str, Any] | None = None,
     ) -> ModelResponse: ...
 
 
@@ -40,7 +44,11 @@ class OpenAICompatibleModel:
         self.base_url = base_url.rstrip("/")
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        *,
+        response_format: dict[str, Any] | None = None,
     ) -> ModelResponse:
         body: dict[str, Any] = {
             "model": self.model,
@@ -50,6 +58,8 @@ class OpenAICompatibleModel:
         if tools:
             body["tools"] = list(tools)
             body["tool_choice"] = "auto"
+        if response_format is not None:
+            body["response_format"] = response_format
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -93,11 +103,17 @@ class ScriptedModel:
     def __init__(self, responses: Sequence[Message | ModelResponse]) -> None:
         self.responses = list(responses)
         self.requests: list[list[Message]] = []
+        self.response_formats: list[dict[str, Any] | None] = []
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        *,
+        response_format: dict[str, Any] | None = None,
     ) -> ModelResponse:
         self.requests.append(list(messages))
+        self.response_formats.append(response_format)
         if not self.responses:
             raise RuntimeError("ScriptedModel has no response left")
         response = self.responses.pop(0)

@@ -168,6 +168,10 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(report.output_tokens, 6)
         self.assertEqual(report.attempts[0], "not json")
         self.assertEqual(len(report.parse_errors), 1)
+        self.assertEqual(
+            model.response_formats,
+            [{"type": "json_object"}, {"type": "json_object"}],
+        )
         self.assertIn("JSON was invalid", model.requests[1][-1].content)
 
     def test_second_repair_uses_a_short_json_only_request(self):

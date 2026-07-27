@@ -194,9 +194,10 @@ round 和 5 次候选 benchmark 配额。
 第一版有意允许候选修改 evaluator 和 tests，因此分数提升属于开放式自修改结果，可能来自
 Agent 能力、评测修复或评测标准变化，必须结合 patch 人工分析，不能直接等同于任务能力提升。
 
-Diagnosis 和 Plan 的结构化模型输出默认最多尝试三次，并记录每次原始输出和解析错误。如果
-三次仍不符合 schema，该代以 `structured_output_failed` 拒绝并回滚，后续 generation
-继续运行；普通程序、网络或 benchmark 异常仍会停止运行，避免掩盖真实故障。
+Diagnosis 和 Plan 通过 OpenAI-compatible `response_format=json_object` 请求服务端约束
+JSON 生成，再由本地 parser 检查四层、任务 ID 和指标等语义规则。语义校验默认最多尝试
+三次，并记录每次原始输出和解析错误；三次仍失败时与其他未恢复异常一样停止运行、保持当前
+代数不变，修复原因后使用 `--resume` 重跑同一代。
 
 ```bash
 strataevo \

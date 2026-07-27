@@ -61,7 +61,12 @@ class ModelTests(unittest.TestCase):
         model = OpenAICompatibleModel(
             "test-model", api_key="secret", base_url="http://model.test/v1"
         )
-        response = model.complete([Message("user", "find papers")], [])
+        response_format = {"type": "json_object"}
+        response = model.complete(
+            [Message("user", "find papers")],
+            [],
+            response_format=response_format,
+        )
 
         self.assertEqual(
             response.message.tool_calls, [ToolCall("call_1", "search", {"query": "agents"})]
@@ -71,6 +76,7 @@ class ModelTests(unittest.TestCase):
         sent = json.loads(request.data)
         self.assertEqual(sent["model"], "test-model")
         self.assertEqual(sent["messages"][0]["content"], "find papers")
+        self.assertEqual(sent["response_format"], response_format)
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
 
     @patch("urllib.request.urlopen")

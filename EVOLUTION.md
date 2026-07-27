@@ -258,14 +258,15 @@ evolution/runs/<run_name>/
 即使某一代被拒绝，各 attempt 的 `changes.patch` 仍会保留，保证每次自身修改都可以审计和
 复现。
 
-Diagnosis 或 Plan 的结构化输出默认最多尝试三次：第一次失败后携带完整上下文重生成，
-第二次失败后使用短上下文专门修复 JSON。成功报告会保存原始尝试和解析错误；三次仍失败时，
-该代写入 `failure.json`、`record.json` 和 Evolution Memory，结果记为
-`structured_output_failed`，回滚后继续下一代。系统不会用规则生成伪诊断代替模型。
+Diagnosis 和 Plan 使用 OpenAI-compatible `response_format=json_object`，由模型服务在
+解码阶段约束 JSON 语法，再由本地 parser 校验四层、任务 ID、指标和 Plan 一致性。语义输出
+默认最多尝试三次：第一次失败后携带完整上下文重生成，第二次失败后使用短上下文专门修复。
+成功报告会保存原始尝试、解析错误和累计 Token，系统不会用规则生成伪诊断代替模型。
 
-普通模型请求、代码、网络或 benchmark 异常不会被降级处理，也不会推进 `state.json`。
+结构化输出耗尽重试后会保存所有原始响应并停止运行，与普通模型请求、代码、网络或 benchmark
+异常采用相同事务语义：回滚未提交修改，不推进 `state.json`，不写 Evolution Memory。
 再次使用 `--resume` 时，未完成目录会先归档为 `generation-XXXX-failed-XXXX`，然后从同一
-父代重新执行；包含 `record.json` 的完成目录不会被自动覆盖。
+父代、同一代数重新执行；包含 `record.json` 的完成目录不会被自动覆盖。
 
 ## 结构化评测证据
 
@@ -379,8 +380,8 @@ Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复�
 经验，不作为当前根因的证明；最终仍由固定验证和真实评测决定候选是否晋级。
 
 Memory 使用代数作为唯一键并采用原子文件替换。重复写入完全相同的一代不会产生重复记录，
-内容冲突则会报错。结构化输出耗尽重试的拒绝代会写入 Memory；其他异常中断的未完成代不写入
-Memory，使用 `--resume` 时会从已有记录继续。
+内容冲突则会报错。结构化输出或其他异常中断的未完成代不写入 Memory，使用 `--resume` 时
+会从已有记录继续。
 Memory 位于已被 Git 忽略的运行目录中，因此不会污染源码提交，但接受和拒绝的尝试都会保留。
 
 ## 评测数据边界
