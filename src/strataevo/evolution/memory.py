@@ -127,6 +127,7 @@ class EvolutionMemoryEntry:
             "mixed_change_scope",
             "unclassified_change",
             "benchmark_rejected",
+            "structured_output_failed",
         }:
             raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
         return entry

@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.plan import (
     EvolutionPlanner,
@@ -22,6 +23,7 @@ class EvolutionPlanTests(unittest.TestCase):
             self._parent(),
             mutable_paths=["src/tinyagent"],
             existing_files=["src/tinyagent/agent.py", "src/tinyagent/workspace.py"],
+            evaluation_contract=EvaluationContract("HumanEval", "measure task-solving ability"),
         )
 
         self.assertEqual(report.plan.target_diagnosis, 1)
@@ -34,6 +36,8 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertIn('"src/tinyagent/workspace.py"', request)
         self.assertIn('"requires_strict_improvement": true', request)
         self.assertIn('"parent_task_score": 0.5', request)
+        self.assertIn('"change_effects"', request)
+        self.assertIn("new or otherwise unreferenced files", request)
 
     def test_likely_files_must_be_inside_mutable_paths(self):
         invalid = self._plan()

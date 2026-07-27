@@ -98,6 +98,11 @@ Execution constraints:
 - Writable paths: {mutable_paths}
 - Any version-controlled project file may be changed. Keep each candidate focused enough that its
   effect can be understood from the diff and evaluation result.
+- Use change_effects in the evaluation contract to verify that the chosen files can affect the
+  intended object at the intended time. Full-project permission is not evidence that a file is
+  loaded by the current benchmark.
+- Do not add standalone solutions for failed benchmark tasks unless active Agent code imports or
+  reads them. Do not use an evaluator change as evidence of improved Agent capability.
 - Total model/tool steps available: {config.mutator_max_steps}
 - Refinement rounds available: {config.mutator_rounds}
 - Candidate benchmark evaluations available: {config.max_eval_attempts}

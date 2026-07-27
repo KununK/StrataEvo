@@ -17,6 +17,7 @@ from .io import read_json, write_json
 from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .mutator import mutate
 from .plan import EvolutionPlanReport, plan_evolution
+from .structured import StructuredOutputError
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
 
 
@@ -142,7 +143,13 @@ def run_one_generation(config_path: Path) -> int:
     plan_path = generation_dir / "plan.json"
 
     try:
-        diagnosis = diagnose_evaluation(config, parent_report, diagnosis_path, memory.latest())
+        diagnosis = diagnose_evaluation(
+            config,
+            parent_report,
+            diagnosis_path,
+            memory.latest(),
+            evaluator.contract,
+        )
         diagnosed_layers = {
             layer.value
             for item in diagnosis.diagnoses
@@ -298,6 +305,25 @@ def run_one_generation(config_path: Path) -> int:
         )
         _print_generation(record)
         return 0
+    except StructuredOutputError as error:
+        if git.changed_paths():
+            git.rollback()
+        _finish_structured_failure(
+            state_path,
+            state,
+            generation_dir,
+            generation,
+            parent_commit,
+            parent_report,
+            memory,
+            error,
+        )
+        print(
+            f"generation={generation} decision=rejected "
+            f"outcome=structured_output_failed reason={error}",
+            flush=True,
+        )
+        return 0
     except KeyboardInterrupt:
         if git.changed_paths():
             git.rollback()
@@ -412,6 +438,61 @@ def _finish_generation(
         EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_result.output)
     )
     state["next_generation"] = record.generation + 1
+    write_json(state_path, state)
+
+
+def _finish_structured_failure(
+    state_path: Path,
+    state: dict[str, Any],
+    generation_dir: Path,
+    generation: int,
+    parent_commit: str,
+    parent_report: EvaluationReport,
+    memory: EvolutionMemory,
+    error: StructuredOutputError,
+) -> None:
+    details = {
+        "error_type": type(error).__name__,
+        "error": str(error),
+        "outcome_type": "structured_output_failed",
+        **error.to_dict(),
+    }
+    write_json(generation_dir / "failure.json", details)
+    write_json(
+        generation_dir / "record.json",
+        {
+            "generation": generation,
+            "parent_commit": parent_commit,
+            "resulting_commit": None,
+            "decision": "rejected",
+            "outcome_type": "structured_output_failed",
+            "reason": str(error),
+            "stage": error.label,
+            "changed_paths": [],
+            "parent_report": parent_report.to_dict(),
+            "structured_output": error.to_dict(),
+        },
+    )
+    memory.append(
+        EvolutionMemoryEntry(
+            generation=generation,
+            parent_commit=parent_commit,
+            resulting_commit=None,
+            decision="rejected",
+            outcome_type="structured_output_failed",
+            reason=str(error),
+            diagnoses=[],
+            plan={"failed_stage": error.label},
+            outcome_observations=[],
+            changed_paths=[],
+            patch_path=None,
+            patch_excerpt="",
+            agent_output="",
+            parent_task_score=parent_report.task_score,
+            candidate_task_score=None,
+        )
+    )
+    state["next_generation"] = generation + 1
     write_json(state_path, state)
 
 

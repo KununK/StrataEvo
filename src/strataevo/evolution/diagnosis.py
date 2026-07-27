@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel
 
+from .contract import EvaluationContract
 from .evidence import EvidenceBundle, TaskEvidence
 from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
@@ -82,6 +83,7 @@ class DiagnosisReport:
     output_tokens: int
     raw_output: str
     attempts: list[str]
+    parse_errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,13 +94,14 @@ class DiagnosisReport:
             "output_tokens": self.output_tokens,
             "raw_output": self.raw_output,
             "attempts": self.attempts,
+            "parse_errors": self.parse_errors,
         }
 
 
 class EvidenceDiagnoser:
     """Ask a model to cluster evidence and attribute each problem to an evolution layer."""
 
-    def __init__(self, model: Model, *, max_cases: int = 40, repair_retries: int = 1) -> None:
+    def __init__(self, model: Model, *, max_cases: int = 40, repair_retries: int = 2) -> None:
         if max_cases <= 0:
             raise ValueError("max_cases must be positive")
         if repair_retries < 0:
@@ -111,6 +114,7 @@ class EvidenceDiagnoser:
         self,
         bundle: EvidenceBundle,
         history: list[EvolutionMemoryEntry] | None = None,
+        evaluation_contract: EvaluationContract | None = None,
     ) -> DiagnosisReport:
         cases = _select_cases(bundle.cases, self.max_cases)
         payload = {
@@ -123,6 +127,11 @@ class EvidenceDiagnoser:
                 "requires_strict_improvement": True,
             },
             "cases": [_compact_case(case) for case in cases],
+            "change_effects": (
+                evaluation_contract.to_dict()["change_effects"]
+                if evaluation_contract is not None
+                else []
+            ),
             "prior_evolution": memory_context(history or []),
         }
         messages = [
@@ -150,6 +159,7 @@ class EvidenceDiagnoser:
             output_tokens=response.output_tokens,
             raw_output=response.raw_output,
             attempts=response.attempts,
+            parse_errors=response.errors,
         )
 
 
@@ -172,7 +182,10 @@ causes. Treat each case's passed field as authoritative. A passed case that stop
 a successful but potentially inefficient case, not an incomplete task; never describe it as missing
 a solution. When any failed cases exist, diagnose mechanisms that can improve those failures before
 pure efficiency issues from passed cases. Prefer the layer closest to the failed mechanism rather
-than listing every layer. Return one to six diagnoses as exactly this JSON object:
+than listing every layer. The supplied change_effects explain when repository changes become active;
+use them to distinguish changing the task-solving Agent from changing its controller or evaluator.
+Do not assume that adding a standalone answer for a failed benchmark task changes Agent behavior.
+Return one to six diagnoses as exactly this JSON object:
 {
   "diagnoses": [
     {
@@ -193,6 +206,7 @@ def diagnose_evaluation(
     report: EvaluationReport,
     destination: str | Path,
     history: list[EvolutionMemoryEntry] | None = None,
+    evaluation_contract: EvaluationContract | None = None,
 ) -> DiagnosisReport:
     evidence_path = Path(
         report.metrics.get("evidence_path", Path(report.output_dir) / "evidence.json")
@@ -204,7 +218,7 @@ def diagnose_evaluation(
         temperature=0.0,
         timeout=300.0,
     )
-    diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history)
+    diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history, evaluation_contract)
     write_json(destination, diagnosis.to_dict())
     return diagnosis
 
@@ -286,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--max-cases", type=int, default=40)
-    parser.add_argument("--repair-retries", type=int, default=1)
+    parser.add_argument("--repair-retries", type=int, default=2)
     args = parser.parse_args(argv)
     evidence_path = Path(args.output_dir) / "evidence.json"
     bundle = EvidenceBundle.from_dict(json.loads(evidence_path.read_text(encoding="utf-8")))

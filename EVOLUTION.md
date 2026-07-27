@@ -45,8 +45,22 @@ eval/outputs/
 
 ## Evaluation Contract
 
-每个 Evaluator 仍声明 benchmark 名称和任务目标，供 Diagnosis、Planner 和运行记录使用。
-Evaluation Contract 不再划分可写目录或拒绝跨目录修改。
+每个 Evaluator 声明 benchmark 名称、任务目标以及项目修改的作用对象和生效时机，供
+Diagnosis、Planner、自修改 Agent 和运行记录使用。Evaluation Contract 不划分可写目录，
+也不拒绝跨目录修改。
+
+默认作用关系包括：
+
+```text
+src/tinyagent/**            候选 benchmark 立即加载，直接影响任务 Agent
+src/strataevo/evolution/**  当前 worker 已加载，通常从下一代开始影响演化控制器
+eval/**                     候选 benchmark 立即加载，但改变的是测量协议
+tests/**                    立即影响固定验证，不改变任务 Agent
+未被引用的新文件           在活动代码导入或读取前不会生效
+模型权重或 adapter          没有显式 TTA 加载路径时不能由普通源码修改改变
+```
+
+这些说明保留全项目写权限，同时帮助模型区分“可以修改”和“修改能否在本轮产生目标效果”。
 
 每次运行使用的契约保存在 `evolution/runs/<run_name>/evaluation_contract.json`。
 
@@ -226,7 +240,7 @@ evolution/runs/<run_name>/
 各文件含义：
 
 - `config.json`：本次演化实验的固定配置；
-- `evaluation_contract.json`：当前 benchmark 的名称和任务目标；
+- `evaluation_contract.json`：当前 benchmark 的名称、任务目标和项目修改作用关系；
 - `state.json`：当前代数、当前提交和父代评分；
 - `evolution_memory.jsonl`：所有已完成代的诊断、修改、指标和接受/拒绝结果；
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
@@ -243,9 +257,15 @@ evolution/runs/<run_name>/
 
 即使某一代被拒绝，各 attempt 的 `changes.patch` 仍会保留，保证每次自身修改都可以审计和
 复现。
-异常中断的代不会推进 `state.json`。再次使用 `--resume` 时，未完成目录会先归档为
-`generation-XXXX-failed-XXXX`，然后从同一父代重新执行；包含 `record.json` 的完成目录不会
-被自动覆盖。
+
+Diagnosis 或 Plan 的结构化输出默认最多尝试三次：第一次失败后携带完整上下文重生成，
+第二次失败后使用短上下文专门修复 JSON。成功报告会保存原始尝试和解析错误；三次仍失败时，
+该代写入 `failure.json`、`record.json` 和 Evolution Memory，结果记为
+`structured_output_failed`，回滚后继续下一代。系统不会用规则生成伪诊断代替模型。
+
+普通模型请求、代码、网络或 benchmark 异常不会被降级处理，也不会推进 `state.json`。
+再次使用 `--resume` 时，未完成目录会先归档为 `generation-XXXX-failed-XXXX`，然后从同一
+父代重新执行；包含 `record.json` 的完成目录不会被自动覆盖。
 
 ## 结构化评测证据
 
@@ -285,10 +305,10 @@ architecture  Agent loop、停止、验证、恢复、状态和编排
 ```
 
 诊断结果保存为 `diagnosis.json`，每项问题都包含可核验的任务 ID 和观察事实。模型层不能
-仅以“更强模型表现更好”为依据。自修改执行器必须沿诊断方向修改，并先读取引用的轨迹验证
-假设。四层归因用于形成假设和审计，不对文件实施严格的分层权限；同一个模块可能同时包含
-上下文、工具和架构行为。如果模型第一次没有返回合法 schema，诊断器会把校验错误反馈给
-模型并默认修复重试一次；所有原始尝试及累计 Token 都保存在 `diagnosis.json`。
+仅以“更强模型表现更好”为依据。Diagnosis 同时读取 Evaluation Contract 中的修改作用关系，
+区分任务 Agent、演化控制器和 evaluator。自修改执行器必须沿诊断方向修改，并先读取引用的
+轨迹验证假设。四层归因用于形成假设和审计，不对文件实施严格的分层权限；同一个模块可能
+同时包含上下文、工具和架构行为。结构化输出的原始尝试、解析错误及累计 Token 都会保存。
 
 已有 HumanEval 证据可以单独诊断：
 
@@ -359,7 +379,8 @@ Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复�
 经验，不作为当前根因的证明；最终仍由固定验证和真实评测决定候选是否晋级。
 
 Memory 使用代数作为唯一键并采用原子文件替换。重复写入完全相同的一代不会产生重复记录，
-内容冲突则会报错。异常中断的未完成代不写入 Memory，使用 `--resume` 时会从已有记录继续。
+内容冲突则会报错。结构化输出耗尽重试的拒绝代会写入 Memory；其他异常中断的未完成代不写入
+Memory，使用 `--resume` 时会从已有记录继续。
 Memory 位于已被 Git 忽略的运行目录中，因此不会污染源码提交，但接受和拒绝的尝试都会保留。
 
 ## 评测数据边界

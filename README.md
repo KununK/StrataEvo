@@ -185,8 +185,18 @@ round 和 5 次候选 benchmark 配额。
 选择候选，随后会重新评测父代与候选；新鲜候选的 pass@1 严格更高才会提交，否则恢复父代。
 步数、Token 和时间继续记录为研究指标，但不混入晋级分数。
 
+全项目写权限不会把所有文件视为等效候选。Evaluation Contract 同时向 Diagnosis、Planner
+和自修改 Agent 说明修改的作用对象与生效时机：`src/tinyagent/` 会在候选 benchmark
+子进程中立即生效，`src/strataevo/evolution/` 通常到下一代才生效，`eval/` 改变测量协议，
+未被活动代码引用的新文件不会自动影响任务 Agent。这些信息用于引导因果明确的修改，不收紧
+文件权限。
+
 第一版有意允许候选修改 evaluator 和 tests，因此分数提升属于开放式自修改结果，可能来自
 Agent 能力、评测修复或评测标准变化，必须结合 patch 人工分析，不能直接等同于任务能力提升。
+
+Diagnosis 和 Plan 的结构化模型输出默认最多尝试三次，并记录每次原始输出和解析错误。如果
+三次仍不符合 schema，该代以 `structured_output_failed` 拒绝并回滚，后续 generation
+继续运行；普通程序、网络或 benchmark 异常仍会停止运行，避免掩盖真实故障。
 
 ```bash
 strataevo \

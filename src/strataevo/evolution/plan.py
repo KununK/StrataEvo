@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -143,6 +143,7 @@ class EvolutionPlanReport:
     output_tokens: int
     raw_output: str
     attempts: list[str]
+    parse_errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -152,13 +153,14 @@ class EvolutionPlanReport:
             "output_tokens": self.output_tokens,
             "raw_output": self.raw_output,
             "attempts": self.attempts,
+            "parse_errors": self.parse_errors,
         }
 
 
 class EvolutionPlanner:
     """Select one diagnosis and turn it into a measurable intervention."""
 
-    def __init__(self, model: Model, *, repair_retries: int = 1) -> None:
+    def __init__(self, model: Model, *, repair_retries: int = 2) -> None:
         if repair_retries < 0:
             raise ValueError("repair_retries must be non-negative")
         self.model = model
@@ -222,6 +224,7 @@ class EvolutionPlanner:
             output_tokens=response.output_tokens,
             raw_output=response.raw_output,
             attempts=response.attempts,
+            parse_errors=response.errors,
         )
 
 
@@ -246,8 +249,13 @@ repository.existing_mutable_files or a plausible new file below repository.mutab
 paths guide the mutation but do not narrow its configured write permissions.
 
 The repository is open for project-wide evolution. The evaluation_contract states the active task
-objective but does not limit writable files. Prefer a focused, causally testable intervention even
-though any version-controlled project file may be changed.
+objective and change_effects but does not limit writable files. Prefer a focused, causally testable
+intervention even though any version-controlled project file may be changed. Select likely_files
+whose activation and benchmark effect match the hypothesis. Do not plan a standalone implementation
+of one failed benchmark task unless active Agent code will load it. Evaluator changes may repair a
+broken measurement, but their score change cannot demonstrate improved Agent capability. A model
+layer plan must name an available model adaptation mechanism; ordinary source edits do not alter
+served model weights.
 
 Return exactly this JSON object:
 {

@@ -22,6 +22,7 @@ from strataevo.evolution.plan import (
     ExpectedOutcome,
     MetricDirection,
 )
+from strataevo.evolution.structured import StructuredOutputError
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from strataevo.evolution.workspace import SelfWorkspace
 from tinyagent import AgentResult, Message, Usage
@@ -800,6 +801,68 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(len(memory), 1)
             self.assertEqual(memory[0]["decision"], "rejected")
             self.assertIsNone(memory[0]["candidate_task_score"])
+
+    def test_structured_failure_is_recorded_and_advances_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            (source / "agent.py").write_text("VERSION = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "evo")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            commit = self._git_output(root, "rev-parse", "HEAD").strip()
+
+            run_dir = root / "evolution/runs/test"
+            run_dir.mkdir(parents=True)
+            config = EvolutionConfig(repo=str(root), run_name="test", branch="evo")
+            config_path = run_dir / "config.json"
+            config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+            report = EvaluationReport(0.5, {}, "parent", "parent.log")
+            (run_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "next_generation": 1,
+                        "current_commit": commit,
+                        "current_report": report.to_dict(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            error = StructuredOutputError(
+                "diagnosis",
+                ["bad one", "bad two", "bad three"],
+                ["missing object", "missing comma", "invalid schema"],
+                30,
+                6,
+            )
+
+            with (
+                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch(
+                    "strataevo.evolution.cli.diagnose_evaluation",
+                    side_effect=error,
+                ),
+            ):
+                self.assertEqual(run_one_generation(config_path), 0)
+
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["next_generation"], 2)
+            failure = json.loads(
+                (run_dir / "generation-0001/failure.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(failure["outcome_type"], "structured_output_failed")
+            self.assertEqual(failure["attempts"], ["bad one", "bad two", "bad three"])
+            record = json.loads(
+                (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["decision"], "rejected")
+            self.assertEqual(record["stage"], "diagnosis")
+            memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
+            self.assertEqual(memory[0]["outcome_type"], "structured_output_failed")
 
     @staticmethod
     def _git(root: Path, *arguments: str) -> None:

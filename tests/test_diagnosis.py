@@ -2,9 +2,11 @@ import json
 import unittest
 from dataclasses import replace
 
+from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence
 from strataevo.evolution.memory import EvolutionMemoryEntry, MemoryDiagnosis
+from strataevo.evolution.structured import StructuredOutputError
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 
 
@@ -61,7 +63,11 @@ class DiagnosisTests(unittest.TestCase):
             )
         ]
 
-        report = EvidenceDiagnoser(model).diagnose(self._bundle(), history)
+        report = EvidenceDiagnoser(model).diagnose(
+            self._bundle(),
+            history,
+            EvaluationContract("HumanEval", "measure task-solving ability"),
+        )
 
         diagnosis = report.diagnoses[0]
         self.assertEqual(diagnosis.primary_layer, EvolutionLayer.ARCHITECTURE)
@@ -75,6 +81,8 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn("task score did not improve", request)
         self.assertIn('"passed": false', request)
         self.assertIn('"requires_strict_improvement": true', request)
+        self.assertIn('"change_effects"', request)
+        self.assertIn("src/tinyagent/**", request)
 
     def test_passed_max_steps_case_is_explicitly_an_efficiency_signal(self):
         response = {
@@ -159,7 +167,54 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(report.input_tokens, 30)
         self.assertEqual(report.output_tokens, 6)
         self.assertEqual(report.attempts[0], "not json")
+        self.assertEqual(len(report.parse_errors), 1)
         self.assertIn("JSON was invalid", model.requests[1][-1].content)
+
+    def test_second_repair_uses_a_short_json_only_request(self):
+        valid = {
+            "diagnoses": [
+                {
+                    "primary_layer": "tools",
+                    "related_layers": [],
+                    "problem": "A destructive command removed the artifact.",
+                    "evidence": ["HumanEval/25 ran rm -f solution.py."],
+                    "affected_tasks": ["HumanEval/25"],
+                    "proposed_direction": "Improve destructive-command handling.",
+                    "confidence": 0.9,
+                }
+            ]
+        }
+        model = ScriptedModel(
+            [
+                Message("assistant", "not json"),
+                Message("assistant", '{"diagnoses": [}'),
+                Message("assistant", json.dumps(valid)),
+            ]
+        )
+
+        report = EvidenceDiagnoser(model).diagnose(self._bundle())
+
+        self.assertEqual(len(report.attempts), 3)
+        self.assertEqual(len(report.parse_errors), 2)
+        self.assertEqual(model.requests[2][0].role, "system")
+        self.assertIn("Repair structured output", model.requests[2][0].content)
+        self.assertNotIn("HumanEval/25", model.requests[2][0].content)
+
+    def test_terminal_structured_error_preserves_attempts(self):
+        model = ScriptedModel(
+            [
+                Message("assistant", "first invalid"),
+                Message("assistant", "second invalid"),
+                Message("assistant", "third invalid"),
+            ]
+        )
+
+        with self.assertRaises(StructuredOutputError) as raised:
+            EvidenceDiagnoser(model).diagnose(self._bundle())
+
+        self.assertEqual(raised.exception.label, "diagnosis")
+        self.assertEqual(len(raised.exception.attempts), 3)
+        self.assertEqual(len(raised.exception.errors), 3)
 
     def test_diagnosis_requires_affected_task(self):
         response = {
