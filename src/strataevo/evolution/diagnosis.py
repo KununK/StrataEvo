@@ -18,6 +18,13 @@ from .memory import EvolutionMemoryEntry, memory_context
 from .structured import request_json
 from .types import EvaluationReport, EvolutionConfig
 
+DIAGNOSIS_CONTEXT_LIMIT_CHARS = 60_000
+DIAGNOSIS_TOOL_EVENTS = 6
+DIAGNOSIS_VALUE_CHARS = 200
+DIAGNOSIS_REQUEST = (
+    "Diagnose the following evaluation evidence. Return only the requested JSON.\n\n"
+)
+
 
 class EvolutionLayer(StrEnum):
     MODEL = "model"
@@ -101,14 +108,22 @@ class DiagnosisReport:
 class EvidenceDiagnoser:
     """Ask a model to cluster evidence and attribute each problem to an evolution layer."""
 
-    def __init__(self, model: Model, *, max_cases: int = 40, repair_retries: int = 2) -> None:
-        if max_cases <= 0:
-            raise ValueError("max_cases must be positive")
+    def __init__(
+        self,
+        model: Model,
+        *,
+        max_cases: int = 40,
+        repair_retries: int = 2,
+        context_limit_chars: int = DIAGNOSIS_CONTEXT_LIMIT_CHARS,
+    ) -> None:
+        if max_cases <= 0 or context_limit_chars <= 0:
+            raise ValueError("max_cases and context_limit_chars must be positive")
         if repair_retries < 0:
             raise ValueError("repair_retries must be non-negative")
         self.model = model
         self.max_cases = max_cases
         self.repair_retries = repair_retries
+        self.context_limit_chars = context_limit_chars
 
     def diagnose(
         self,
@@ -126,22 +141,22 @@ class EvidenceDiagnoser:
                 "meaning": "pass@1",
                 "requires_strict_improvement": True,
             },
-            "cases": [_compact_case(case) for case in cases],
+            "cases": [],
+            "case_details": [],
             "evaluation_contract": (
                 evaluation_contract.to_dict() if evaluation_contract is not None else None
             ),
             "prior_evolution": memory_context(history or []),
         }
+        _fit_evidence(payload, cases, self.context_limit_chars)
         messages = [
             Message("system", DIAGNOSIS_SYSTEM_PROMPT),
             Message(
                 "user",
-                "Diagnose the following evaluation evidence. "
-                "Return only the requested JSON.\n\n"
-                + json.dumps(payload, indent=2, ensure_ascii=False),
+                DIAGNOSIS_REQUEST + json.dumps(payload, indent=2, ensure_ascii=False),
             ),
         ]
-        known_tasks = {case.task_id for case in cases}
+        known_tasks = {case["task_id"] for case in payload["cases"]}
         response = request_json(
             self.model,
             messages,
@@ -151,7 +166,7 @@ class EvidenceDiagnoser:
         )
         return DiagnosisReport(
             source_dir=bundle.source_dir,
-            input_case_count=len(cases),
+            input_case_count=len(payload["cases"]),
             diagnoses=response.value,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
@@ -240,7 +255,7 @@ def _select_cases(cases: list[TaskEvidence], limit: int) -> list[TaskEvidence]:
     return (selected + remaining)[:limit]
 
 
-def _compact_case(case: TaskEvidence) -> dict[str, Any]:
+def _case_summary(case: TaskEvidence) -> dict[str, Any]:
     return {
         "task_id": case.task_id,
         "status": case.status,
@@ -248,13 +263,57 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
         "stop_reason": case.stop_reason,
         "steps": case.steps,
         "candidate_present": case.candidate_present,
-        "tool_events": [_compact_tool_event(event) for event in case.tool_events[-20:]],
-        "error": case.error[:1000],
         "signals": case.signals,
+    }
+
+
+def _case_details(case: TaskEvidence) -> dict[str, Any]:
+    return {
+        "task_id": case.task_id,
+        "tool_events": [
+            _compact_tool_event(event) for event in case.tool_events[-DIAGNOSIS_TOOL_EVENTS:]
+        ],
+        "error": case.error[:500],
         "candidate_path": case.candidate_path,
         "candidate_source": _candidate_excerpt(case),
         "session_path": case.session_path,
     }
+
+
+def _fit_evidence(
+    payload: dict[str, Any],
+    cases: list[TaskEvidence],
+    context_limit_chars: int,
+) -> None:
+    budget = context_limit_chars - len(DIAGNOSIS_SYSTEM_PROMPT) - len(DIAGNOSIS_REQUEST)
+    history = payload["prior_evolution"]
+    while history and _payload_size(payload) > budget:
+        history.pop(0)
+    if _payload_size(payload) > budget:
+        raise ValueError("diagnosis metadata exceeds context limit")
+
+    summaries = payload["cases"]
+    included: list[TaskEvidence] = []
+    base_size = _payload_size(payload)
+    summary_limit = base_size + (budget - base_size) // 3
+    for case in cases:
+        summaries.append(_case_summary(case))
+        if _payload_size(payload) > summary_limit:
+            summaries.pop()
+            break
+        included.append(case)
+    if not included:
+        raise ValueError("diagnosis context limit cannot fit one case")
+
+    details = payload["case_details"]
+    for case in included:
+        details.append(_case_details(case))
+        if _payload_size(payload) > budget:
+            details.pop()
+
+
+def _payload_size(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def _compact_tool_event(event: ToolEvent) -> dict[str, Any]:
@@ -267,7 +326,7 @@ def _compact_tool_event(event: ToolEvent) -> dict[str, Any]:
     }
 
 
-def _compact_value(value: Any, limit: int = 1000) -> Any:
+def _compact_value(value: Any, limit: int = DIAGNOSIS_VALUE_CHARS) -> Any:
     if not isinstance(value, str) or len(value) <= limit:
         return value
     return value[:limit] + "...[truncated]"
@@ -280,7 +339,7 @@ def _candidate_excerpt(case: TaskEvidence) -> str:
     if not path.is_file():
         return ""
     try:
-        return path.read_text(encoding="utf-8")[:4000]
+        return path.read_text(encoding="utf-8")[:2000]
     except (OSError, UnicodeDecodeError):
         return ""
 

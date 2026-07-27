@@ -123,6 +123,46 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn('"task_id": "HumanEval/26"', request)
         self.assertIn('"passed": true', request)
 
+    def test_evidence_details_respect_a_global_context_budget(self):
+        response = {
+            "diagnoses": [
+                {
+                    "primary_layer": "context",
+                    "related_layers": [],
+                    "problem": "The task did not leave a candidate.",
+                    "evidence": ["HumanEval/25 completed without a candidate."],
+                    "affected_tasks": ["HumanEval/25"],
+                    "proposed_direction": "Improve task completion behavior.",
+                    "confidence": 0.8,
+                }
+            ]
+        }
+        model = ScriptedModel([Message("assistant", json.dumps(response))])
+        bundle = self._bundle()
+        bundle.cases = [
+            replace(
+                bundle.cases[0],
+                task_id=f"HumanEval/{number}",
+                tool_events=[
+                    ToolEvent(
+                        "run_shell",
+                        {"command": "x" * 2000},
+                        "y" * 2000,
+                    )
+                    for _ in range(20)
+                ],
+            )
+            for number in range(25, 45)
+        ]
+
+        EvidenceDiagnoser(model, context_limit_chars=8000).diagnose(bundle)
+
+        messages = model.requests[0]
+        self.assertLessEqual(sum(len(message.content) for message in messages), 8000)
+        payload = json.loads(messages[1].content.split("\n\n", 1)[1])
+        self.assertGreater(len(payload["cases"]), len(payload["case_details"]))
+        self.assertTrue(payload["case_details"])
+
     def test_unknown_layer_is_rejected(self):
         response = {
             "diagnoses": [
