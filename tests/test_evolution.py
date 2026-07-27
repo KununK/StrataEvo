@@ -184,6 +184,9 @@ class EvolutionTests(unittest.TestCase):
             output = root / "evolution/runs/test/result.json"
             output.parent.mkdir(parents=True)
             output.write_text("{}\n", encoding="utf-8")
+            environment_file = root / ".venv/bin/python"
+            environment_file.parent.mkdir(parents=True)
+            environment_file.write_text("runtime\n", encoding="utf-8")
             repository = GitRepository(root, ["."])
 
             self.assertEqual(repository.changed_paths(), [".gitignore"])
@@ -191,6 +194,7 @@ class EvolutionTests(unittest.TestCase):
             self.assertNotIn("evolution/runs/test/result.json", repository.staged_diff())
             repository.rollback()
             self.assertTrue(output.is_file())
+            self.assertTrue(environment_file.is_file())
 
     def test_validation_failure_does_not_use_benchmark_budget(self):
         with tempfile.TemporaryDirectory() as directory:

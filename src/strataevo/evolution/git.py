@@ -38,20 +38,12 @@ class GitRepository:
         return self._run(["rev-parse", "HEAD"], capture=True).strip()
 
     def changed_paths(self) -> list[str]:
-        tracked = self._run(
-            ["diff", "--name-only", "--", *self._pathspecs()], capture=True
-        ).splitlines()
-        staged = self._run(
-            ["diff", "--cached", "--name-only", "--", *self._pathspecs()], capture=True
-        ).splitlines()
-        untracked = self._run(
-            ["ls-files", "--others", "--exclude-standard", "--", *self._pathspecs()],
-            capture=True,
-        ).splitlines()
-        return sorted(set(filter(None, [*tracked, *staged, *untracked])))
+        return sorted(set([*self._tracked_paths(), *self._untracked_paths()]))
 
     def stage(self) -> None:
-        self._run(["add", "-A", "--", *self._pathspecs()])
+        paths = self.changed_paths()
+        if paths:
+            self._run(["add", "-A", "--", *paths])
 
     def staged_diff(self) -> str:
         return self._run(["diff", "--cached", "--binary", "--", *self._pathspecs()], capture=True)
@@ -72,15 +64,28 @@ class GitRepository:
             raise RuntimeError(f"git apply failed: {completed.stderr.strip()}")
 
     def rollback(self) -> None:
-        self._run(["restore", "--staged", "--worktree", "--", *self._pathspecs()])
-        untracked = self._run(
-            ["ls-files", "--others", "--exclude-standard", "--", *self._pathspecs()],
-            capture=True,
-        ).splitlines()
-        for relative in untracked:
+        tracked = self._tracked_paths()
+        if tracked:
+            self._run(["restore", "--staged", "--worktree", "--", *tracked])
+        for relative in self._untracked_paths():
             target = (self.root / relative).resolve()
             if target.is_relative_to(self.root):
                 remove_path(target)
+
+    def _tracked_paths(self) -> list[str]:
+        tracked = self._run(
+            ["diff", "--name-only", "--", *self._pathspecs()], capture=True
+        ).splitlines()
+        staged = self._run(
+            ["diff", "--cached", "--name-only", "--", *self._pathspecs()], capture=True
+        ).splitlines()
+        return sorted(set(filter(None, [*tracked, *staged])))
+
+    def _untracked_paths(self) -> list[str]:
+        return self._run(
+            ["ls-files", "--others", "--exclude-standard", "--", *self._pathspecs()],
+            capture=True,
+        ).splitlines()
 
     def _pathspecs(self) -> list[str]:
         excluded = [f":(exclude){path}" for path in sorted(PROTECTED_WRITE_ROOTS)]
