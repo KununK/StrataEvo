@@ -115,6 +115,11 @@ class EvidenceDiagnoser:
             "evaluator": bundle.evaluator,
             "summary": bundle.summary,
             "signal_counts": bundle.signal_counts,
+            "promotion_objective": {
+                "metric": "task_score",
+                "meaning": "pass@1",
+                "requires_strict_improvement": True,
+            },
             "cases": [_compact_case(case) for case in cases],
             "prior_evolution": memory_context(history or []),
         }
@@ -182,8 +187,11 @@ Layer definitions:
 Use only supplied observations. Cite task IDs and concrete events in evidence. Prior evolution
 records are outcomes, not proof of the current cause: use them to avoid blindly repeating rejected
 hypotheses and to preserve improvements that were accepted. Do not propose code or claim hidden
-causes. Prefer the layer closest to the failed mechanism rather than listing every layer. Return one
-to six diagnoses as exactly this JSON object:
+causes. Treat each case's passed field as authoritative. A passed case that stopped at max_steps is
+a successful but potentially inefficient case, not an incomplete task; never describe it as missing
+a solution. When any failed cases exist, diagnose mechanisms that can improve those failures before
+pure efficiency issues from passed cases. Prefer the layer closest to the failed mechanism rather
+than listing every layer. Return one to six diagnoses as exactly this JSON object:
 {
   "diagnoses": [
     {
@@ -248,6 +256,7 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
     return {
         "task_id": case.task_id,
         "status": case.status,
+        "passed": case.passed,
         "stop_reason": case.stop_reason,
         "steps": case.steps,
         "candidate_present": case.candidate_present,

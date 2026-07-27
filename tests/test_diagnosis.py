@@ -1,5 +1,6 @@
 import json
 import unittest
+from dataclasses import replace
 
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence
@@ -75,6 +76,46 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn("rm -f solution.py", request)
         self.assertIn('"prior_evolution"', request)
         self.assertIn("utility did not improve", request)
+        self.assertIn('"passed": false', request)
+        self.assertIn('"requires_strict_improvement": true', request)
+
+    def test_passed_max_steps_case_is_explicitly_an_efficiency_signal(self):
+        response = {
+            "diagnoses": [
+                {
+                    "primary_layer": "model",
+                    "related_layers": [],
+                    "problem": "The failed task produced an incorrect result.",
+                    "evidence": ["HumanEval/25 failed its assertions."],
+                    "affected_tasks": ["HumanEval/25"],
+                    "proposed_direction": "Improve reasoning about the failed case.",
+                    "confidence": 0.8,
+                }
+            ]
+        }
+        model = ScriptedModel([Message("assistant", json.dumps(response))])
+        bundle = self._bundle()
+        passed = replace(
+            bundle.cases[0],
+            task_id="HumanEval/26",
+            status="pass",
+            passed=True,
+            stop_reason="max_steps",
+            candidate_path="candidate.py",
+            candidate_present=True,
+            artifact_delete_attempted=False,
+            error="",
+            signals=["max_steps"],
+        )
+        bundle.cases.append(passed)
+
+        EvidenceDiagnoser(model).diagnose(bundle)
+
+        system_prompt = model.requests[0][0].content
+        request = model.requests[0][1].content
+        self.assertIn("successful but potentially inefficient", system_prompt)
+        self.assertIn('"task_id": "HumanEval/26"', request)
+        self.assertIn('"passed": true', request)
 
     def test_unknown_layer_is_rejected(self):
         response = {

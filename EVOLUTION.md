@@ -341,6 +341,11 @@ prerequisites             实现长期价值需要的前置条件
 父代值、候选值以及是否符合预期。Planner 首次返回无效 JSON、错误诊断序号、层级不一致或
 不存在的指标时，会收到校验错误并默认修复一次。
 
+当前晋级要求 `task_score` 严格提高，因此父代未满分时，Plan 必须包含
+`task_score: increase`。通过任务上的 `max_steps` 和 `average_agent_steps` 只表示效率，
+可以作为次级观测，但不能单独成为当前代的进化目标；Diagnosis 也不得把
+`passed=true` 的 `max_steps` 案例描述成没有完成任务。
+
 Planner 还会收到真实的可演化根目录和其中已有的文件清单。`likely_files` 必须位于这些
 可演化路径内，可以引用已有文件，也可以提出在可演化目录中新建文件；边界外的虚构路径会
 触发自动修复重试。

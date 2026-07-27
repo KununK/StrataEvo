@@ -176,6 +176,11 @@ class EvolutionPlanner:
         payload = {
             "diagnoses": [item.to_dict() for item in diagnosis.diagnoses],
             "available_metrics": available_metrics,
+            "promotion_policy": {
+                "primary_metric": "task_score",
+                "requires_strict_improvement": True,
+                "parent_task_score": parent_report.task_score,
+            },
             "repository": {
                 "mutable_paths": mutable_paths,
                 "existing_mutable_files": existing_files or [],
@@ -208,6 +213,7 @@ class EvolutionPlanner:
                 plan = EvolutionPlan.from_dict(
                     data, diagnosis, set(available_metrics), mutable_paths
                 )
+                _validate_promotion_alignment(plan, parent_report)
             except ValueError as error:
                 last_error = error
                 if attempt_number == self.repair_retries:
@@ -247,6 +253,12 @@ Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluat
 mismatch: the intervention was not tested by the benchmark and must not be interpreted as a
 negative task result.
 
+The promotion_policy is authoritative. While parent_task_score is below 1.0, select a diagnosis
+whose intervention can plausibly fix an actually failed task and include task_score with direction
+increase in expected_outcomes. Signals such as max_steps or average_agent_steps from passed tasks
+are efficiency observations only. They may be secondary outcomes, but a pure efficiency plan cannot
+be promoted by the current strict task-score rule.
+
 Some changes may enable future improvements without helping the current benchmark immediately.
 Record that possibility in expected_long_term_value and prerequisites, but do not use speculative
 future value as proof of current benefit. Every plan must still have one or more outcomes measurable
@@ -277,6 +289,23 @@ Return exactly this JSON object:
   "prerequisites": ["condition needed for the future value"],
   "confidence": 0.0
 }"""
+
+
+def _validate_promotion_alignment(
+    plan: EvolutionPlan,
+    parent_report: EvaluationReport,
+) -> None:
+    if parent_report.task_score >= 1.0:
+        return
+    if any(
+        outcome.metric == "task_score" and outcome.direction == MetricDirection.INCREASE
+        for outcome in plan.expected_outcomes
+    ):
+        return
+    raise ValueError(
+        "plan must expect task_score to increase because promotion requires strict task-score "
+        "improvement"
+    )
 
 
 def plan_evolution(

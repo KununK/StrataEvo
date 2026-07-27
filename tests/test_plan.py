@@ -32,6 +32,8 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertIn('"available_metrics"', request)
         self.assertIn('"signal:artifact_missing": 2.0', request)
         self.assertIn('"src/tinyagent/workspace.py"', request)
+        self.assertIn('"requires_strict_improvement": true', request)
+        self.assertIn('"parent_task_score": 0.5', request)
 
     def test_likely_files_must_be_inside_mutable_paths(self):
         invalid = self._plan()
@@ -88,6 +90,21 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertEqual(len(report.attempts), 2)
         self.assertIn("invalid direction", model.requests[1][-1].content)
 
+    def test_plan_must_expect_strict_task_score_improvement(self):
+        invalid = self._plan()
+        invalid["expected_outcomes"][1]["direction"] = "non_decreasing"
+        model = ScriptedModel(
+            [
+                Message("assistant", json.dumps(invalid)),
+                Message("assistant", json.dumps(self._plan())),
+            ]
+        )
+
+        report = EvolutionPlanner(model).create_plan(self._diagnosis(), self._parent())
+
+        self.assertEqual(len(report.attempts), 2)
+        self.assertIn("must expect task_score to increase", model.requests[1][-1].content)
+
     def test_expected_outcomes_are_compared_with_candidate_metrics(self):
         model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
         plan = EvolutionPlanner(model).create_plan(self._diagnosis(), self._parent()).plan
@@ -123,8 +140,8 @@ class EvolutionPlanTests(unittest.TestCase):
                 },
                 {
                     "metric": "task_score",
-                    "direction": "non_decreasing",
-                    "reason": "Task quality must be preserved.",
+                    "direction": "increase",
+                    "reason": "The intervention must improve the strict promotion metric.",
                 },
             ],
             "likely_files": ["src/tinyagent/agent.py"],
