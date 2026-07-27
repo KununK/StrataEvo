@@ -151,10 +151,10 @@ def _run_refinement_session(
         if data.get("evaluations_remaining") == 0 or remaining_steps <= 0:
             stop_reason = "max_steps" if remaining_steps <= 0 else "evaluation_limit"
             break
-        if (
-            latest.output.strip().upper() == "FINALIZE"
-            and data.get("outcome_type") in {"evaluated", "no_change"}
-        ):
+        if latest.output.strip().upper() == "FINALIZE" and data.get("outcome_type") in {
+            "evaluated",
+            "no_change",
+        }:
             stop_reason = "completed"
             break
 

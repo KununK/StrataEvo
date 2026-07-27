@@ -51,6 +51,47 @@ class TaskRunner(Protocol):
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
 
+def add_common_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    dataset: str,
+    output_dir: str,
+) -> None:
+    parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
+    parser.add_argument("--base-url", default="http://localhost:8000/v1")
+    parser.add_argument("--dataset", default=dataset)
+    parser.add_argument("--dataset-file", help="local JSON or JSONL tasks instead of Hugging Face")
+    parser.add_argument("--split", default="test")
+    parser.add_argument("--output-dir", default=output_dir)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--max-steps", type=int, default=12)
+    parser.add_argument("--model-timeout", type=float, default=120.0)
+    parser.add_argument("--test-timeout", type=float, default=10.0)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--no-resume", action="store_true")
+
+
+def validate_common_arguments(args: argparse.Namespace) -> None:
+    if args.offset < 0 or args.limit is not None and args.limit < 0:
+        raise ValueError("offset and limit must be non-negative")
+    if args.workers <= 0 or args.max_steps <= 0:
+        raise ValueError("workers and max-steps must be positive")
+
+
+def load_local_rows(path: str | Path) -> list[dict[str, Any]]:
+    target = Path(path)
+    if target.suffix == ".jsonl":
+        return read_jsonl(target)
+    data = json.loads(target.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = data.get("test", data.get("tasks"))
+    if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+        raise ValueError("local dataset must be a JSON list of objects or JSONL file")
+    return data
+
+
 def run_agent_task(
     task: dict[str, Any],
     model: Model,

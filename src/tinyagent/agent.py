@@ -157,7 +157,7 @@ class Agent:
         removed_groups = current_groups[: len(current_groups) - len(kept_groups)]
         removed = [*older, *(message for group in removed_groups for message in group)]
         kept = [message for group in kept_groups for message in group]
-        compacted = ([system] if system else [])
+        compacted = [system] if system else []
 
         available = self.context_limit_chars - fixed_size - kept_size
         if removed and available > 100:

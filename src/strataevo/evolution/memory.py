@@ -62,10 +62,7 @@ class EvolutionMemoryEntry:
     patch_excerpt: str
     agent_output: str
     parent_task_score: float
-    parent_utility: float
     candidate_task_score: float | None
-    candidate_utility: float | None
-    utility_delta: float | None
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,10 +83,7 @@ class EvolutionMemoryEntry:
             "patch_excerpt": self.patch_excerpt[:PATCH_EXCERPT_CHARS],
             "agent_output": self.agent_output[:2000],
             "parent_task_score": self.parent_task_score,
-            "parent_utility": self.parent_utility,
             "candidate_task_score": self.candidate_task_score,
-            "candidate_utility": self.candidate_utility,
-            "utility_delta": self.utility_delta,
             "evaluation_attempts": [_attempt_context(item) for item in self.evaluation_attempts],
         }
 
@@ -112,6 +106,8 @@ class EvolutionMemoryEntry:
         values.setdefault(
             "outcome_type", _legacy_outcome_type(values.get("decision"), values.get("reason"))
         )
+        for legacy in ("parent_utility", "candidate_utility", "utility_delta"):
+            values.pop(legacy, None)
         values.setdefault("evaluation_attempts", [])
         if not isinstance(values["evaluation_attempts"], list) or not all(
             isinstance(item, dict) for item in values["evaluation_attempts"]
@@ -147,8 +143,6 @@ class EvolutionMemoryEntry:
 
         parent = record.promotion_parent_report or record.parent_report
         candidate = record.candidate_report
-        parent_utility = float(parent["utility"])
-        candidate_utility = float(candidate["utility"]) if candidate else None
         patch_path = Path(record.patch_path) if record.patch_path else None
         patch_excerpt = ""
         if patch_path and patch_path.is_file():
@@ -170,12 +164,7 @@ class EvolutionMemoryEntry:
             patch_excerpt=patch_excerpt,
             agent_output=agent_output.strip(),
             parent_task_score=float(parent["task_score"]),
-            parent_utility=parent_utility,
             candidate_task_score=float(candidate["task_score"]) if candidate else None,
-            candidate_utility=candidate_utility,
-            utility_delta=(
-                candidate_utility - parent_utility if candidate_utility is not None else None
-            ),
             evaluation_attempts=list(record.evaluation_attempts),
         )
 
@@ -281,7 +270,6 @@ def _attempt_context(attempt: dict[str, Any]) -> dict[str, Any]:
         "reason": str(attempt.get("reason", ""))[:500],
         "changed_paths": attempt.get("changed_paths", []),
         "task_score": report.get("task_score") if isinstance(report, dict) else None,
-        "utility": report.get("utility") if isinstance(report, dict) else None,
         "output_dir": report.get("output_dir") if isinstance(report, dict) else None,
     }
 

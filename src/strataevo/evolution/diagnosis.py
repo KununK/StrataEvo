@@ -12,7 +12,9 @@ from typing import Any
 from tinyagent import Message, Model, OpenAICompatibleModel
 
 from .evidence import EvidenceBundle, TaskEvidence
+from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
+from .structured import request_json
 from .types import EvaluationReport, EvolutionConfig
 
 
@@ -133,43 +135,22 @@ class EvidenceDiagnoser:
             ),
         ]
         known_tasks = {case.task_id for case in cases}
-        attempts: list[str] = []
-        input_tokens = 0
-        output_tokens = 0
-        last_error: ValueError | None = None
-        for attempt_number in range(self.repair_retries + 1):
-            response = self.model.complete(messages, [])
-            attempts.append(response.message.content)
-            input_tokens += response.usage.input_tokens
-            output_tokens += response.usage.output_tokens
-            try:
-                diagnoses = _parse_diagnoses(response.message.content, known_tasks)
-            except ValueError as error:
-                last_error = error
-                if attempt_number == self.repair_retries:
-                    break
-                messages.extend(
-                    [
-                        response.message,
-                        Message(
-                            "user",
-                            f"Your JSON was invalid: {error}. Correct it and return only JSON.",
-                        ),
-                    ]
-                )
-                continue
-            return DiagnosisReport(
-                source_dir=bundle.source_dir,
-                input_case_count=len(cases),
-                diagnoses=diagnoses,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                raw_output=response.message.content,
-                attempts=attempts,
-            )
-        raise ValueError(
-            f"diagnosis remained invalid after {len(attempts)} attempt(s): {last_error}"
-        ) from last_error
+        response = request_json(
+            self.model,
+            messages,
+            lambda data: _parse_diagnoses(data, known_tasks),
+            label="diagnosis",
+            repair_retries=self.repair_retries,
+        )
+        return DiagnosisReport(
+            source_dir=bundle.source_dir,
+            input_case_count=len(cases),
+            diagnoses=response.value,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            raw_output=response.raw_output,
+            attempts=response.attempts,
+        )
 
 
 DIAGNOSIS_SYSTEM_PROMPT = """You diagnose failures in a self-evolving software agent.
@@ -224,7 +205,7 @@ def diagnose_evaluation(
         timeout=300.0,
     )
     diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history)
-    _write_json(Path(destination), diagnosis.to_dict())
+    write_json(destination, diagnosis.to_dict())
     return diagnosis
 
 
@@ -248,11 +229,6 @@ def _select_cases(cases: list[TaskEvidence], limit: int) -> list[TaskEvidence]:
 
 
 def _compact_case(case: TaskEvidence) -> dict[str, Any]:
-    notable_commands = [
-        command
-        for command in case.shell_commands
-        if "solution.py" in command and ("rm " in command or "unlink " in command)
-    ]
     return {
         "task_id": case.task_id,
         "status": case.status,
@@ -261,9 +237,8 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
         "steps": case.steps,
         "candidate_present": case.candidate_present,
         "candidate_created": case.candidate_created,
-        "artifact_delete_attempted": case.artifact_delete_attempted,
         "tool_sequence": case.tool_sequence,
-        "notable_shell_commands": notable_commands,
+        "shell_commands": case.shell_commands,
         "error": case.error[:1000],
         "signals": case.signals,
         "candidate_path": case.candidate_path,
@@ -284,27 +259,7 @@ def _candidate_excerpt(case: TaskEvidence) -> str:
         return ""
 
 
-def _parse_object(text: str) -> dict[str, Any]:
-    content = text.strip()
-    if content.startswith("```"):
-        lines = content.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        content = "\n".join(lines).strip()
-    start = content.find("{")
-    end = content.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("diagnosis response does not contain a JSON object")
-    data = json.loads(content[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("diagnosis response must be a JSON object")
-    return data
-
-
-def _parse_diagnoses(text: str, known_tasks: set[str]) -> list[Diagnosis]:
-    data = _parse_object(text)
+def _parse_diagnoses(data: dict[str, Any], known_tasks: set[str]) -> list[Diagnosis]:
     raw_diagnoses = data.get("diagnoses")
     if not isinstance(raw_diagnoses, list) or not raw_diagnoses:
         raise ValueError("diagnosis response must contain a non-empty diagnoses list")
@@ -324,13 +279,6 @@ def _string_list(value: Any, field_name: str) -> list[str]:
     return list(dict.fromkeys(item.strip() for item in value if item.strip()))
 
 
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Diagnose benchmark evidence by evolution layer")
     parser.add_argument("output_dir", help="benchmark output directory")
@@ -347,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         model, max_cases=args.max_cases, repair_retries=args.repair_retries
     ).diagnose(bundle)
     target = Path(args.output) if args.output else Path(args.output_dir) / "diagnosis.json"
-    _write_json(target, report.to_dict())
+    write_json(target, report.to_dict())
     print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
     return 0
 

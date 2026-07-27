@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -14,6 +13,7 @@ from .attempts import CandidateEvaluationSession
 from .diagnosis import DiagnosisReport, diagnose_evaluation
 from .evaluation import BENCHMARKS, Evaluator, create_evaluator, validation_commands
 from .git import GitRepository
+from .io import read_json, write_json
 from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .mutator import mutate
 from .plan import EvolutionPlanReport, plan_evolution
@@ -34,14 +34,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mutator-max-steps", type=int, default=200)
     parser.add_argument("--mutator-rounds", type=int, default=5)
     parser.add_argument("--max-eval-attempts", type=int, default=5)
-    parser.add_argument("--eval-limit", type=int, default=5)
+    parser.add_argument("--eval-limit", type=int)
     parser.add_argument("--eval-offset", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
-    parser.add_argument("--step-penalty", type=float, default=0.001)
-    parser.add_argument("--token-penalty", type=float, default=0.0000001)
-    parser.add_argument("--min-utility-delta", type=float, default=0.0)
-    parser.add_argument("--max-score-drop", type=float, default=0.0)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--worker-config", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -64,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     if config_path.exists():
         if not args.resume:
             raise RuntimeError(f"run already exists; use --resume: {run_dir}")
-        config = EvolutionConfig.from_dict(_read_json(config_path))
+        config = EvolutionConfig.from_dict(read_json(config_path))
     else:
         run_dir.mkdir(parents=True, exist_ok=False)
         config = EvolutionConfig(
@@ -72,7 +68,6 @@ def main(argv: list[str] | None = None) -> int:
             run_name=run_name,
             branch=args.branch,
             benchmark=args.benchmark,
-            generations=args.generations,
             model=args.model,
             base_url=args.base_url,
             mutator_max_steps=args.mutator_max_steps,
@@ -82,12 +77,8 @@ def main(argv: list[str] | None = None) -> int:
             eval_offset=args.eval_offset,
             eval_workers=args.eval_workers,
             benchmark_max_steps=args.benchmark_max_steps,
-            step_penalty=args.step_penalty,
-            token_penalty=args.token_penalty,
-            min_utility_delta=args.min_utility_delta,
-            max_score_drop=args.max_score_drop,
         )
-        _write_json(config_path, config.to_dict())
+        write_json(config_path, config.to_dict())
 
     for _ in range(args.generations):
         try:
@@ -114,13 +105,13 @@ def main(argv: list[str] | None = None) -> int:
         if completed.returncode != 0:
             return completed.returncode
         state_path = run_dir / "state.json"
-        if state_path.is_file() and _read_json(state_path).get("completed", False):
+        if state_path.is_file() and read_json(state_path).get("completed", False):
             break
     return 0
 
 
 def run_one_generation(config_path: Path) -> int:
-    config = EvolutionConfig.from_dict(_read_json(config_path))
+    config = EvolutionConfig.from_dict(read_json(config_path))
     repo = Path(config.repo).resolve()
     run_dir = config_path.parent
     state_path = run_dir / "state.json"
@@ -132,13 +123,13 @@ def run_one_generation(config_path: Path) -> int:
         raise RuntimeError(f"expected branch {config.branch!r}, found {current_branch!r}")
 
     evaluator = create_evaluator(repo, config)
-    _write_json(run_dir / "evaluation_contract.json", evaluator.contract.to_dict())
+    write_json(run_dir / "evaluation_contract.json", evaluator.contract.to_dict())
     state = _load_or_create_state(state_path, git, evaluator, run_dir)
     parent_report = EvaluationReport.from_dict(state["current_report"])
     if parent_report.task_score >= 1.0:
         state["completed"] = True
         state["completion_reason"] = "task score reached maximum 1.0"
-        _write_json(state_path, state)
+        write_json(state_path, state)
         print("[evolution] stopping: pass@1 already reached 1.0000", flush=True)
         return 0
 
@@ -194,7 +185,7 @@ def run_one_generation(config_path: Path) -> int:
             evaluator.contract,
             candidate_session.evaluate,
         )
-        _write_json(
+        write_json(
             generation_dir / "agent_result.json",
             {
                 "output": agent_result.output,
@@ -214,9 +205,7 @@ def run_one_generation(config_path: Path) -> int:
             last_attempt = attempts[-1] if attempts else None
             outcome_type = last_attempt["outcome_type"] if last_attempt else "no_change"
             reason = (
-                last_attempt["reason"]
-                if last_attempt
-                else "meta-agent produced no source changes"
+                last_attempt["reason"] if last_attempt else "meta-agent produced no source changes"
             )
             record = _record(
                 generation,
@@ -312,7 +301,7 @@ def run_one_generation(config_path: Path) -> int:
     except KeyboardInterrupt:
         if git.changed_paths():
             git.rollback()
-        _write_json(
+        write_json(
             generation_dir / "failure.json",
             {"error_type": "KeyboardInterrupt", "error": "interrupted by user"},
         )
@@ -321,7 +310,7 @@ def run_one_generation(config_path: Path) -> int:
     except Exception as error:
         if git.changed_paths():
             git.rollback()
-        _write_json(
+        write_json(
             generation_dir / "failure.json",
             {"error_type": type(error).__name__, "error": str(error)},
         )
@@ -335,7 +324,7 @@ def _load_or_create_state(
     run_dir: Path,
 ) -> dict[str, Any]:
     if path.exists():
-        state = _read_json(path)
+        state = read_json(path)
         if state["current_commit"] != git.head():
             raise RuntimeError("evolution state does not match the current Git revision")
         return state
@@ -345,7 +334,7 @@ def _load_or_create_state(
         "current_commit": git.head(),
         "current_report": report.to_dict(),
     }
-    _write_json(path, state)
+    write_json(path, state)
     return state
 
 
@@ -355,8 +344,7 @@ def _promotion_decision(
 ) -> tuple[bool, str]:
     if candidate.task_score <= parent.task_score:
         return False, (
-            f"pass@1 {candidate.task_score:.6f} did not exceed "
-            f"parent {parent.task_score:.6f}"
+            f"pass@1 {candidate.task_score:.6f} did not exceed parent {parent.task_score:.6f}"
         )
     return True, "pass@1 strictly improved"
 
@@ -419,12 +407,12 @@ def _finish_generation(
     plan_report: EvolutionPlanReport,
     agent_result: Any,
 ) -> None:
-    _write_json(generation_dir / "record.json", record.to_dict())
+    write_json(generation_dir / "record.json", record.to_dict())
     memory.append(
         EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_result.output)
     )
     state["next_generation"] = record.generation + 1
-    _write_json(state_path, state)
+    write_json(state_path, state)
 
 
 def _validate_args(args: argparse.Namespace) -> None:
@@ -433,24 +421,19 @@ def _validate_args(args: argparse.Namespace) -> None:
         "mutator-max-steps": args.mutator_max_steps,
         "mutator-rounds": args.mutator_rounds,
         "max-eval-attempts": args.max_eval_attempts,
-        "eval-limit": args.eval_limit,
         "eval-workers": args.eval_workers,
         "benchmark-max-steps": args.benchmark_max_steps,
     }
     for name, value in positive.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive")
-    if args.eval_offset < 0 or args.max_score_drop < 0:
-        raise ValueError("eval-offset and max-score-drop must be non-negative")
+    if args.eval_offset < 0 or args.eval_limit is not None and args.eval_limit <= 0:
+        raise ValueError("eval-offset must be non-negative and eval-limit must be positive")
 
 
 def _print_generation(record: GenerationRecord) -> None:
     candidate = record.candidate_report
-    metrics = ""
-    if candidate:
-        metrics = (
-            f" score={float(candidate['task_score']):.4f} utility={float(candidate['utility']):.6f}"
-        )
+    metrics = f" score={float(candidate['task_score']):.4f}" if candidate else ""
     print(
         f"generation={record.generation} decision={record.decision} "
         f"outcome={record.outcome_type}{metrics} reason={record.reason}",
@@ -476,17 +459,6 @@ def _prepare_generation_dir(path: Path) -> None:
 
 def _git_output(repo: Path, arguments: list[str]) -> str:
     return subprocess.check_output(["git", *arguments], cwd=repo, text=True)
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
 
 
 if __name__ == "__main__":

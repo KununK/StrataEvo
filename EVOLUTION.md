@@ -100,11 +100,9 @@ strataevo \
 --max-eval-attempts       每代最多进行的候选 benchmark 次数
 --benchmark               评测集：humaneval 或 mbpp
 --eval-offset             benchmark 开发任务的起始位置
---eval-limit              使用的开发任务数量
+--eval-limit              使用的任务数量；默认不限制
 --eval-workers            同时发送给 vLLM 的评测 Agent 数量
 --benchmark-max-steps     每个被评测 Agent 的最大工具循环步数
---min-utility-delta       新一代晋级所需的最小效用提升
---max-score-drop          允许的任务分数下降，默认为 0
 ```
 
 `--mutator-max-steps` 默认是 `200`，`--mutator-rounds` 和 `--max-eval-attempts` 默认都是
@@ -165,14 +163,8 @@ round 反馈，同时避免从多次随机生成中直接选择最高值造成�
 
 ## 晋级规则
 
-所选 benchmark 的 pass@1 是当前唯一的任务晋级指标。效用仍会作为观测数据记录 Agent 步数和
-Token 消耗：
-
-```text
-utility = pass@1
-          - step_penalty * average_agent_steps
-          - token_penalty * average_tokens
-```
+所选 benchmark 的 pass@1 是当前唯一的晋级指标。Agent 步数、Token 和运行时间作为独立
+观测指标保留，不合成为效用分数。
 
 一个新版本只有同时满足以下条件才会被提交：
 
@@ -181,7 +173,7 @@ utility = pass@1
 3. 探索阶段选出的最佳候选超过已有父代记录；
 4. 新鲜的候选确认 pass@1 严格高于新鲜的父代重测 pass@1。
 
-效用及其组成指标不参与当前的接受或拒绝决策。pass@1 相同的候选即使成本更低也不会晋级。
+pass@1 相同的候选即使成本更低也不会晋级。
 如果 baseline 或已接受父代的 pass@1 已达到 `1.0`，运行会在 Diagnosis 和自修改之前提前
 结束，因为当前晋级规则下不存在更高分数。
 
@@ -278,11 +270,8 @@ sessions/
 ```
 
 它为每道题记录任务状态、停止原因、步骤、Token、工具序列、Shell 命令，以及
-`solution.py` 是否曾创建、是否请求删除和最终是否保留。收集器只记录可观察事实，不负责
+`solution.py` 是否曾创建和最终是否保留。收集器只记录可观察事实，不负责
 判断问题属于模型、上下文、工具还是架构层；分层归因由后续 Diagnosis 阶段完成。
-
-从工具调用文本中观察到的删除命令记录为 `artifact_delete_attempted`，只表示模型曾请求
-删除候选文件，不表示命令成功执行。最终文件不存在由 `artifact_missing` 表示。
 
 已有 HumanEval 结果可以离线生成证据，无需再次调用模型：
 
@@ -336,7 +325,7 @@ expected_long_term_value  可能支持的未来改进
 prerequisites             实现长期价值需要的前置条件
 ```
 
-`expected_outcomes` 只能引用父代报告中实际存在的数值指标，例如 `task_score`、`utility`、
+`expected_outcomes` 只能引用父代报告中实际存在的数值指标，例如 `task_score`、
 `average_agent_steps` 或 `signal:artifact_missing`。候选评测后，Memory 会记录这些指标的
 父代值、候选值以及是否符合预期。Planner 首次返回无效 JSON、错误诊断序号、层级不一致或
 不存在的指标时，会收到校验错误并默认修复一次。
@@ -361,7 +350,7 @@ pass@1 晋级规则；本阶段不会因为推测性的长期价值接受当前�
 ```text
 generation、diagnoses、plan、expected outcome observations
 changed_paths、patch path / excerpt、agent_output
-父代和候选的 task score / utility、utility delta
+父代和候选的 task score
 accepted / rejected、原因和 resulting commit
 ```
 

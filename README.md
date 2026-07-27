@@ -8,11 +8,14 @@ StrataEvo 是一个面向自进化 Agent 和下游任务评测的研究项目。
 
 ```text
 StrataEvo/
-├── src/tinyagent/     # Agent 运行时
-├── tests/             # Tinyagent 回归测试
-├── vllm_serve.sh      # vLLM 服务启动脚本
-├── pyproject.toml     # 统一项目与依赖配置
-├── uv.lock            # uv 依赖锁文件
+├── src/tinyagent/              # 通用 Agent 运行时
+├── src/strataevo/evolution/    # 诊断、计划、修改、评测和版本控制
+├── eval/                       # 共享 coding-agent harness 与 benchmark 适配器
+├── tests/                      # 运行时、演化控制器和 benchmark 回归测试
+├── evolution/runs/             # 实验记录，已被 Git 忽略
+├── EVOLUTION.md                # 自进化控制流与记录格式
+├── vllm_serve.sh               # vLLM 服务启动脚本
+├── pyproject.toml              # 统一项目与依赖配置
 └── README.md
 ```
 
@@ -159,24 +162,25 @@ def evaluate_candidate(candidate: str, task: str) -> dict:
     return {"candidate": candidate, "task": task, "score": 0.0}
 ```
 
-后续自进化层可以作为新包加入 `src/strataevo/`，并通过 Tinyagent 的 `Model`、`Tool`、`SessionStore` 和 `EventBus` 接口组合，而无需修改基础 Agent 循环。
-
 ## 自进化
 
-StrataEvo 现在支持代码库级递归自进化：系统先将候选代码、任务结果和工具轨迹整理为
-结构化 Evidence，再由模型在 Model、Context、Tools 和 Architecture 四层中诊断主要
-演化对象。Evolution Planner 从诊断中选择一项可检验的干预，再由 Tinyagent 运行实例承担的
-自修改角色执行。自修改 Agent 可以在同一代内调用只读的 `evaluate_candidate`，根据固定测试、
-所选 benchmark 的结果和 Evidence 连续修正候选，默认每代最多评测 5 次，整代共享 200 个
-Mutator step。Evaluation Contract 会区分当前 benchmark 可直接观察的 Tinyagent 修改和只在
-后续代生效的 Evolver 修改，后者不能使用本代 benchmark 分数晋级。控制器用代内结果筛选
-候选后，会重新评测一次父代和候选；只有这组未参与筛选的新结果仍然提升才会提交，否则自动
-回滚。下一代由新的 Python 进程加载修改后的源码。每个完成代的诊断、计划、各次候选修改、
-修改生效范围、确认结果及接受或拒绝结果会写入
-`evolution/runs/<run_name>/evolution_memory.jsonl`，供后续代诊断和修改时参考。
+StrataEvo 的每一代按以下顺序运行：
 
-Planner 会看到实际可修改源码清单，执行器支持精确文本替换和按行替换，并将每代结果区分为
-无修改、固定验证失败、基准拒绝或接受，避免把执行失败误认为演化方向无效。
+```text
+benchmark -> Evidence -> 四层 Diagnosis -> Evolution Plan
+          -> 代内多轮修改与候选评测 -> 新鲜父子复测
+          -> Git 提交或回滚 -> Evolution Memory
+```
+
+四层是 Model、Context、Tools 和 Architecture。Evidence 只保存任务结果、候选文件状态、
+工具序列、Shell 命令和 session 路径等可观察事实，不用规则替模型做分层归因。Planner 每代
+选择一项能够提升 `task_score` 的假设。自修改 Agent 默认共享 200 个 step、5 个 refinement
+round 和 5 次候选 benchmark 配额。
+
+Evaluation Contract 声明当前 benchmark 能直接观察哪些代码。当前 HumanEval 和 MBPP 都
+直接评测 `src/tinyagent/`；只影响以后自修改行为的代码不能借用本轮任务分数晋级。探索阶段
+只负责选择候选，随后会重新评测父代与候选。新鲜候选的 pass@1 严格更高才会提交，否则恢复
+父代。步数、Token 和时间继续记录为研究指标，但不混入晋级分数。
 
 ```bash
 strataevo \
@@ -188,8 +192,20 @@ strataevo \
 ```
 
 `--benchmark` 当前支持 `humaneval` 和 `mbpp`。这里修改的是 Agent 自身源码，不是评测任务
-中的 `solution.py`。设计边界、晋级条件、
-断点续跑和输出结构见 [`EVOLUTION.md`](EVOLUTION.md)。
+中的 `solution.py`。不传 `--eval-limit` 时使用所选 benchmark 的完整 split；smoke 实验应
+显式指定数量。设计边界、晋级条件、断点续跑和输出结构见
+[`EVOLUTION.md`](EVOLUTION.md)。
+
+完整 MBPP 演化示例：
+
+```bash
+strataevo \
+  --run-name mbpp-full-1 \
+  --branch evo_test_inter \
+  --benchmark mbpp \
+  --generations 5 \
+  --eval-workers 10
+```
 
 ## 工具与安全边界
 
@@ -199,7 +215,7 @@ Tinyagent 内置 `list_files`、`read_file`、`search_files`、`write_file`、`r
 
 ## 测试
 
-运行 Tinyagent 标准库测试：
+运行全部回归测试：
 
 ```bash
 uv run python -m unittest discover -s tests -v
@@ -211,7 +227,8 @@ uv run python -m unittest discover -s tests -v
 uv run pytest
 ```
 
-测试使用确定性的 `ScriptedModel`，不访问真实模型。
+测试使用确定性的 `ScriptedModel`，不访问真实模型。固定验证还会运行 Ruff 和自进化 CLI
+启动检查。
 
 ## Agent 评测
 

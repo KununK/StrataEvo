@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shlex
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from .io import read_json, read_jsonl, write_json
 
 
 @dataclass(slots=True)
@@ -28,7 +29,6 @@ class TaskEvidence:
     candidate_path: str | None
     candidate_present: bool
     candidate_created: bool
-    artifact_delete_attempted: bool
     tool_sequence: list[str]
     shell_commands: list[str]
     error: str
@@ -42,13 +42,12 @@ class TaskEvidence:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskEvidence:
         values = dict(data)
-        if "artifact_delete_attempted" not in values:
-            values["artifact_delete_attempted"] = bool(
-                values.pop("candidate_deleted", False)
-            )
+        values.pop("artifact_delete_attempted", None)
+        values.pop("candidate_deleted", None)
         values["signals"] = [
-            "artifact_delete_attempted" if item == "artifact_deleted" else item
+            item
             for item in values.get("signals", [])
+            if item not in {"artifact_deleted", "artifact_delete_attempted"}
         ]
         return cls(**values)
 
@@ -77,11 +76,8 @@ class EvidenceBundle:
         values = dict(data)
         values["cases"] = [TaskEvidence.from_dict(item) for item in values.get("cases", [])]
         signal_counts = dict(values.get("signal_counts", {}))
-        legacy_count = int(signal_counts.pop("artifact_deleted", 0))
-        if legacy_count:
-            signal_counts["artifact_delete_attempted"] = (
-                int(signal_counts.get("artifact_delete_attempted", 0)) + legacy_count
-            )
+        signal_counts.pop("artifact_deleted", None)
+        signal_counts.pop("artifact_delete_attempted", None)
         values["signal_counts"] = dict(sorted(signal_counts.items()))
         return cls(**values)
 
@@ -96,9 +92,9 @@ class CodingAgentEvidenceCollector:
 
     def collect(self, output_dir: str | Path) -> EvidenceBundle:
         root = Path(output_dir).resolve()
-        summary = _read_json(root / "summary.json")
-        results = _index_rows(_read_jsonl(root / "results.jsonl"), "results")
-        generations = _index_rows(_read_jsonl(root / "generations.jsonl"), "generations")
+        summary = read_json(root / "summary.json")
+        results = _index_rows(read_jsonl(root / "results.jsonl"), "results")
+        generations = _index_rows(read_jsonl(root / "generations.jsonl"), "generations")
         if set(results) != set(generations):
             missing_results = sorted(set(generations).difference(results))
             missing_generations = sorted(set(results).difference(generations))
@@ -132,7 +128,7 @@ class CodingAgentEvidenceCollector:
     ) -> EvidenceBundle:
         bundle = self.collect(output_dir)
         target = Path(destination) if destination else Path(output_dir) / "evidence.json"
-        _write_json(target, bundle.to_dict())
+        write_json(target, bundle.to_dict())
         return bundle
 
     def _collect_case(
@@ -146,7 +142,7 @@ class CodingAgentEvidenceCollector:
         candidate_file = root / "candidates" / f"{safe_name}.py"
         session_file = root / "sessions" / f"{safe_name}.json"
         messages = generation.get("messages") or []
-        tool_sequence, shell_commands, created, delete_attempted = self._tool_evidence(messages)
+        tool_sequence, shell_commands, created = self._tool_evidence(messages)
         candidate_present = candidate_file.is_file()
         status = str(result.get("status", "unknown"))
         stop_reason = str(generation.get("stop_reason", result.get("agent_stop_reason", "")))
@@ -155,7 +151,6 @@ class CodingAgentEvidenceCollector:
             stop_reason=stop_reason,
             candidate_present=candidate_present,
             candidate_created=created,
-            artifact_delete_attempted=delete_attempted,
             agent_error=str(generation.get("agent_error", "")),
         )
         error = str(generation.get("agent_error") or result.get("stderr") or "")
@@ -173,7 +168,6 @@ class CodingAgentEvidenceCollector:
             candidate_path=str(candidate_file) if candidate_present else None,
             candidate_present=candidate_present,
             candidate_created=created,
-            artifact_delete_attempted=delete_attempted,
             tool_sequence=tool_sequence,
             shell_commands=shell_commands,
             error=error,
@@ -182,13 +176,10 @@ class CodingAgentEvidenceCollector:
             signals=signals,
         )
 
-    def _tool_evidence(
-        self, messages: list[dict[str, Any]]
-    ) -> tuple[list[str], list[str], bool, bool]:
+    def _tool_evidence(self, messages: list[dict[str, Any]]) -> tuple[list[str], list[str], bool]:
         sequence: list[str] = []
         shell_commands: list[str] = []
         created = False
-        delete_attempted = False
         for message in messages:
             for call in message.get("tool_calls") or []:
                 name = str(call.get("name", ""))
@@ -197,19 +188,9 @@ class CodingAgentEvidenceCollector:
                 path = str(arguments.get("path", ""))
                 if name == "write_file" and _is_artifact(path, self.artifact_name):
                     created = True
-                if name == "delete_file" and _is_artifact(path, self.artifact_name):
-                    delete_attempted = True
                 if name == "run_shell":
-                    command = str(arguments.get("command", ""))
-                    shell_commands.append(command)
-                    if _shell_attempts_delete(command, self.artifact_name):
-                        delete_attempted = True
-        return sequence, shell_commands, created, delete_attempted
-
-
-class HumanEvalEvidenceCollector(CodingAgentEvidenceCollector):
-    def __init__(self) -> None:
-        super().__init__("humaneval")
+                    shell_commands.append(str(arguments.get("command", "")))
+        return sequence, shell_commands, created
 
 
 def _signals(
@@ -218,7 +199,6 @@ def _signals(
     stop_reason: str,
     candidate_present: bool,
     candidate_created: bool,
-    artifact_delete_attempted: bool,
     agent_error: str,
 ) -> list[str]:
     signals: list[str] = []
@@ -228,8 +208,6 @@ def _signals(
         signals.append("max_steps")
     if not candidate_present:
         signals.append("artifact_missing")
-    if artifact_delete_attempted:
-        signals.append("artifact_delete_attempted")
     if candidate_created and not candidate_present:
         signals.append("artifact_created_then_missing")
     if stop_reason == "completed" and not candidate_present:
@@ -237,25 +215,6 @@ def _signals(
     if agent_error:
         signals.append("agent_error")
     return signals
-
-
-def _shell_attempts_delete(command: str, artifact_name: str) -> bool:
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens = list(lexer)
-    except ValueError:
-        return False
-    for index, token in enumerate(tokens):
-        if Path(token).name not in {"rm", "unlink"}:
-            continue
-        for argument in tokens[index + 1 :]:
-            if argument in {";", "&&", "||", "|"}:
-                break
-            if not argument.startswith("-") and _is_artifact(argument, artifact_name):
-                return True
-    return False
 
 
 def _is_artifact(path: str, artifact_name: str) -> bool:
@@ -279,36 +238,6 @@ def _task_sort_key(task_id: str) -> tuple[str, int, str]:
     if separator and suffix.isdigit():
         return prefix, int(suffix), task_id
     return task_id, -1, task_id
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"expected JSON object: {path}")
-    return data
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise ValueError(f"expected JSON object: {path}:{line_number}")
-        rows.append(row)
-    return rows
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
 
 
 def main(argv: list[str] | None = None) -> int:

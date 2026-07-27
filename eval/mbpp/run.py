@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from eval.coding_agent import read_jsonl, run_benchmark
+from eval.coding_agent import (
+    add_common_arguments,
+    load_local_rows,
+    run_benchmark,
+    validate_common_arguments,
+)
 from eval.coding_agent import run_agent_task as run_coding_task
 from tinyagent import Model
 
@@ -18,27 +22,18 @@ from .execution import evaluate_source
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate Tinyagent on MBPP")
-    parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
-    parser.add_argument("--base-url", default="http://localhost:8000/v1")
-    parser.add_argument("--dataset", default="google-research-datasets/mbpp")
+    add_common_arguments(
+        parser,
+        dataset="google-research-datasets/mbpp",
+        output_dir="eval/outputs/mbpp/qwen3-coder-agent",
+    )
     parser.add_argument("--dataset-config", default="sanitized")
-    parser.add_argument("--dataset-file", help="local JSON or JSONL tasks instead of Hugging Face")
-    parser.add_argument("--split", default="test")
-    parser.add_argument("--output-dir", default="eval/outputs/mbpp/qwen3-coder-agent")
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--max-steps", type=int, default=12)
-    parser.add_argument("--model-timeout", type=float, default=120.0)
-    parser.add_argument("--test-timeout", type=float, default=10.0)
-    parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--no-resume", action="store_true")
     return parser.parse_args(argv)
 
 
 def load_tasks(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.dataset_file:
-        rows = _load_local_rows(Path(args.dataset_file))
+        rows = load_local_rows(args.dataset_file)
     else:
         from datasets import load_dataset
 
@@ -84,7 +79,7 @@ def render_task_file(task: dict[str, Any]) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    _validate_args(args)
+    validate_common_arguments(args)
     tasks = load_tasks(args)
     dataset = args.dataset_file or (
         f"{args.dataset}:{args.dataset_config}" if args.dataset_config else args.dataset
@@ -146,24 +141,6 @@ def _infer_entry_point(tests: list[str]) -> str:
         if match:
             return match.group(1)
     return ""
-
-
-def _load_local_rows(path: Path) -> list[dict[str, Any]]:
-    if path.suffix == ".jsonl":
-        return read_jsonl(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        data = data.get("test", data.get("tasks"))
-    if not isinstance(data, list):
-        raise ValueError("local dataset must be a JSON list or JSONL file")
-    return data
-
-
-def _validate_args(args: argparse.Namespace) -> None:
-    if args.offset < 0 or args.limit is not None and args.limit < 0:
-        raise ValueError("offset and limit must be non-negative")
-    if args.workers <= 0:
-        raise ValueError("workers must be positive")
 
 
 if __name__ == "__main__":

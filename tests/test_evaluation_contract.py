@@ -29,9 +29,7 @@ class EvaluationContractTests(unittest.TestCase):
         )
 
         self.assertEqual(impact.direct_paths, ("src/tinyagent/agent.py",))
-        self.assertEqual(
-            impact.deferred_paths, ("src/strataevo/evolution/mutator.py",)
-        )
+        self.assertEqual(impact.deferred_paths, ("src/strataevo/evolution/mutator.py",))
         self.assertEqual(impact.unclassified_paths, ("README.md",))
         self.assertFalse(impact.is_direct_only)
 
@@ -74,9 +72,9 @@ class EvaluationContractTests(unittest.TestCase):
     def test_selected_candidate_uses_fresh_promotion_comparison(self):
         reports = iter(
             [
-                EvaluationReport(0.9, 0.9, {}, "selection", "selection.log"),
-                EvaluationReport(0.8, 0.8, {}, "fresh-parent", "fresh-parent.log"),
-                EvaluationReport(0.7, 0.7, {}, "confirmation", "confirmation.log"),
+                EvaluationReport(0.9, {}, "selection", "selection.log"),
+                EvaluationReport(0.8, {}, "fresh-parent", "fresh-parent.log"),
+                EvaluationReport(0.7, {}, "confirmation", "confirmation.log"),
             ]
         )
         with self._repository(reports) as (root, repository, evaluator):
@@ -91,9 +89,7 @@ class EvaluationContractTests(unittest.TestCase):
 
             self.assertFalse(_promotion_decision(parent, candidate)[0])
             self.assertEqual(agent.read_text(encoding="utf-8"), "VERSION = 1\n")
-            self.assertTrue(
-                (root / "attempts/promotion/comparison.json").is_file()
-            )
+            self.assertTrue((root / "attempts/promotion/comparison.json").is_file())
 
     @staticmethod
     def _session(root, repository, evaluator):
@@ -103,7 +99,7 @@ class EvaluationContractTests(unittest.TestCase):
             root,
             repository,
             evaluator,
-            EvaluationReport(0.5, 0.5, {}, "parent", "parent.log"),
+            EvaluationReport(0.5, {}, "parent", "parent.log"),
             attempts,
             [],
             5,
@@ -117,9 +113,7 @@ class EvaluationContractTests(unittest.TestCase):
                 root = Path(self.directory.name)
                 (root / "src/tinyagent").mkdir(parents=True)
                 (root / "src/strataevo/evolution").mkdir(parents=True)
-                (root / "src/tinyagent/agent.py").write_text(
-                    "VERSION = 0\n", encoding="utf-8"
-                )
+                (root / "src/tinyagent/agent.py").write_text("VERSION = 0\n", encoding="utf-8")
                 (root / "src/strataevo/evolution/mutator.py").write_text(
                     "VERSION = 0\n", encoding="utf-8"
                 )
@@ -145,9 +139,7 @@ class EvaluationContractTests(unittest.TestCase):
                     def evaluate(inner_self, _output_dir):
                         inner_self.calls += 1
                         if reports is None:
-                            return EvaluationReport(
-                                0.6, 0.6, {}, "candidate", "candidate.log"
-                            )
+                            return EvaluationReport(0.6, {}, "candidate", "candidate.log")
                         return next(reports)
 
                 mutable = [

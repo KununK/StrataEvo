@@ -176,14 +176,10 @@ class AgentTests(unittest.TestCase):
         result = agent.run("one long tool-driven task")
 
         third_request = model.requests[2]
-        call_ids = [
-            call.id for message in third_request for call in message.tool_calls
-        ]
+        call_ids = [call.id for message in third_request for call in message.tool_calls]
         self.assertNotIn("old", call_ids)
         self.assertIn("new", call_ids)
-        self.assertEqual(
-            [message.role for message in third_request[-2:]], ["assistant", "tool"]
-        )
+        self.assertEqual([message.role for message in third_request[-2:]], ["assistant", "tool"])
         self.assertEqual(third_request[-2].tool_calls[0].id, third_request[-1].tool_call_id)
         self.assertEqual(result.output, "done")
 

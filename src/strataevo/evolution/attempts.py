@@ -9,6 +9,7 @@ from pathlib import Path
 from .contract import ChangeImpact
 from .evaluation import Evaluator, run_commands
 from .git import GitRepository
+from .io import write_json
 from .types import EvaluationReport
 
 
@@ -198,8 +199,7 @@ class CandidateEvaluationSession:
         regressed = report.task_score <= best_score
         restore_attempt = self._best_improving_attempt()
         reason = (
-            "pass@1 delta versus parent: "
-            f"{report.task_score - self.parent_report.task_score:+.6f}"
+            f"pass@1 delta versus parent: {report.task_score - self.parent_report.task_score:+.6f}"
         )
         if regressed:
             restored = "best candidate" if restore_attempt else "parent"
@@ -243,9 +243,7 @@ class CandidateEvaluationSession:
         self._restore(best)
         return best
 
-    def confirm(
-        self, attempt: EvaluationAttempt
-    ) -> tuple[EvaluationReport, EvaluationReport]:
+    def confirm(self, attempt: EvaluationAttempt) -> tuple[EvaluationReport, EvaluationReport]:
         """Compare parent and selected candidate on fresh, unselected benchmark runs."""
         if not attempt.patch_path or attempt.report is None:
             raise ValueError("only an evaluated candidate can be confirmed")
@@ -257,18 +255,13 @@ class CandidateEvaluationSession:
         print("[evolution] promotion check: confirming candidate", flush=True)
         self._restore(attempt)
         candidate = self.evaluator.evaluate(promotion_dir / "candidate" / "evaluation")
-        (promotion_dir / "comparison.json").write_text(
-            json.dumps(
-                {
-                    "selection_report": attempt.report,
-                    "parent_report": parent.to_dict(),
-                    "candidate_report": candidate.to_dict(),
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
-            + "\n",
-            encoding="utf-8",
+        write_json(
+            promotion_dir / "comparison.json",
+            {
+                "selection_report": attempt.report,
+                "parent_report": parent.to_dict(),
+                "candidate_report": candidate.to_dict(),
+            },
         )
         return parent, candidate
 
@@ -284,10 +277,7 @@ class CandidateEvaluationSession:
     ) -> str:
         self.attempts.append(attempt)
         attempt_path = self.generation_dir / f"attempt-{attempt.number:04d}" / "attempt.json"
-        attempt_path.write_text(
-            json.dumps(attempt.to_dict(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        write_json(attempt_path, attempt.to_dict())
         self._working_tree_state = working_tree_state
         return self._feedback(
             attempt,
@@ -313,7 +303,6 @@ class CandidateEvaluationSession:
             "evaluations_remaining": self.max_evaluations - self.evaluations_used,
             "parent_task_score": self.parent_report.task_score,
             "candidate_task_score": report["task_score"] if report else None,
-            "candidate_utility": report["utility"] if report else None,
             "evidence_path": report["metrics"].get("evidence_path") if report else None,
             "signal_counts": report["metrics"].get("evidence_signal_counts") if report else None,
             "change_impact": attempt.change_impact,
@@ -370,9 +359,7 @@ class CandidateEvaluationSession:
     def _best_attempt(self) -> EvaluationAttempt | None:
         evaluated = [attempt for attempt in self.attempts if attempt.report is not None]
         return (
-            max(evaluated, key=lambda item: float(item.report["task_score"]))
-            if evaluated
-            else None
+            max(evaluated, key=lambda item: float(item.report["task_score"])) if evaluated else None
         )
 
     def _best_improving_attempt(self) -> EvaluationAttempt | None:

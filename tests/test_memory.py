@@ -58,7 +58,6 @@ class EvolutionMemoryTests(unittest.TestCase):
         *,
         related: list[str] | None = None,
     ) -> EvolutionMemoryEntry:
-        candidate_utility = 0.6 if decision == "accepted" else 0.4
         return EvolutionMemoryEntry(
             generation=generation,
             parent_commit=f"parent-{generation}",
@@ -88,10 +87,7 @@ class EvolutionMemoryTests(unittest.TestCase):
             patch_excerpt="- old behavior\n+ new behavior",
             agent_output="updated implementation",
             parent_task_score=0.5,
-            parent_utility=0.49,
             candidate_task_score=0.5,
-            candidate_utility=candidate_utility,
-            utility_delta=candidate_utility - 0.49,
         )
 
 

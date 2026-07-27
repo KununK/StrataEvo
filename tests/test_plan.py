@@ -110,7 +110,6 @@ class EvolutionPlanTests(unittest.TestCase):
         plan = EvolutionPlanner(model).create_plan(self._diagnosis(), self._parent()).plan
         candidate = EvaluationReport(
             task_score=0.5,
-            utility=0.495,
             metrics={"evidence_signal_counts": {}},
             output_dir="candidate",
             log_path="candidate.log",
@@ -185,7 +184,6 @@ class EvolutionPlanTests(unittest.TestCase):
     def _parent() -> EvaluationReport:
         return EvaluationReport(
             task_score=0.5,
-            utility=0.49,
             metrics={
                 "average_agent_steps": 5.0,
                 "evidence_signal_counts": {"artifact_missing": 2},

@@ -39,7 +39,7 @@ class DiagnosisTests(unittest.TestCase):
                 resulting_commit=None,
                 decision="rejected",
                 outcome_type="benchmark_rejected",
-                reason="utility did not improve",
+                reason="task score did not improve",
                 diagnoses=[
                     MemoryDiagnosis(
                         primary_layer="tools",
@@ -57,10 +57,7 @@ class DiagnosisTests(unittest.TestCase):
                 patch_excerpt="- vague description\n+ precise description",
                 agent_output="Changed the tool description.",
                 parent_task_score=0.0,
-                parent_utility=-0.01,
                 candidate_task_score=0.0,
-                candidate_utility=-0.02,
-                utility_delta=-0.01,
             )
         ]
 
@@ -75,7 +72,7 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn("HumanEval/25", request)
         self.assertIn("rm -f solution.py", request)
         self.assertIn('"prior_evolution"', request)
-        self.assertIn("utility did not improve", request)
+        self.assertIn("task score did not improve", request)
         self.assertIn('"passed": false', request)
         self.assertIn('"requires_strict_improvement": true', request)
 
@@ -103,7 +100,6 @@ class DiagnosisTests(unittest.TestCase):
             stop_reason="max_steps",
             candidate_path="candidate.py",
             candidate_present=True,
-            artifact_delete_attempted=False,
             error="",
             signals=["max_steps"],
         )
@@ -200,7 +196,6 @@ class DiagnosisTests(unittest.TestCase):
             candidate_path=None,
             candidate_present=False,
             candidate_created=True,
-            artifact_delete_attempted=True,
             tool_sequence=["read_file", "write_file", "run_shell"],
             shell_commands=["rm -f solution.py"],
             error="solution.py was not created",
@@ -209,7 +204,6 @@ class DiagnosisTests(unittest.TestCase):
             signals=[
                 "missing_candidate",
                 "artifact_missing",
-                "artifact_delete_attempted",
                 "artifact_created_then_missing",
                 "completed_without_artifact",
             ],

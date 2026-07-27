@@ -6,7 +6,6 @@ from pathlib import Path
 from strataevo.evolution.evidence import (
     CodingAgentEvidenceCollector,
     EvidenceBundle,
-    HumanEvalEvidenceCollector,
     TaskEvidence,
 )
 
@@ -17,7 +16,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             root = Path(directory)
             self._write_fixture(root)
 
-            bundle = HumanEvalEvidenceCollector().collect_and_write(root)
+            bundle = CodingAgentEvidenceCollector("humaneval").collect_and_write(root)
 
             self.assertEqual(
                 [case.task_id for case in bundle.cases], ["HumanEval/1", "HumanEval/2"]
@@ -26,13 +25,11 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertTrue(passed.candidate_present)
             self.assertIn("max_steps", passed.signals)
             self.assertTrue(missing.candidate_created)
-            self.assertTrue(missing.artifact_delete_attempted)
             self.assertEqual(
                 missing.signals,
                 [
                     "missing_candidate",
                     "artifact_missing",
-                    "artifact_delete_attempted",
                     "artifact_created_then_missing",
                     "completed_without_artifact",
                 ],
@@ -42,7 +39,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertEqual(evidence["cases"][1]["task_id"], "HumanEval/2")
             self.assertNotIn("candidate_deleted", evidence["cases"][1])
 
-    def test_legacy_deleted_field_is_loaded_as_an_attempt(self):
+    def test_legacy_delete_signals_are_ignored(self):
         data = {
             "task_id": "HumanEval/0",
             "entry_point": "answer",
@@ -68,8 +65,7 @@ class EvidenceCollectorTests(unittest.TestCase):
 
         case = TaskEvidence.from_dict(data)
 
-        self.assertTrue(case.artifact_delete_attempted)
-        self.assertIn("artifact_delete_attempted", case.signals)
+        self.assertFalse(hasattr(case, "artifact_delete_attempted"))
         self.assertNotIn("artifact_deleted", case.signals)
 
         bundle = EvidenceBundle.from_dict(
@@ -81,7 +77,7 @@ class EvidenceCollectorTests(unittest.TestCase):
                 "cases": [data],
             }
         )
-        self.assertEqual(bundle.signal_counts, {"artifact_delete_attempted": 1})
+        self.assertEqual(bundle.signal_counts, {})
 
     def test_rejects_results_without_matching_generation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -90,7 +86,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             (root / "generations.jsonl").write_text("", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "task mismatch"):
-                HumanEvalEvidenceCollector().collect(root)
+                CodingAgentEvidenceCollector("humaneval").collect(root)
 
     def test_generic_collector_records_active_benchmark(self):
         with tempfile.TemporaryDirectory() as directory:

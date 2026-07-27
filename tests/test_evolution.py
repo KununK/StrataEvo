@@ -42,6 +42,7 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(args.mutator_rounds, 5)
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
+        self.assertIsNone(args.eval_limit)
 
     def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
         class FakeAgent:
@@ -174,13 +175,13 @@ class EvolutionTests(unittest.TestCase):
                 contract = TEST_CONTRACT
 
                 def evaluate(self, _output_dir):
-                    return EvaluationReport(0.6, 0.6, {}, "candidate", "candidate.log")
+                    return EvaluationReport(0.6, {}, "candidate", "candidate.log")
 
             session = CandidateEvaluationSession(
                 root,
                 GitRepository(root, ["src/tinyagent"]),
                 FakeEvaluator(),
-                EvaluationReport(0.5, 0.5, {}, "parent", "parent.log"),
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
                 root / "attempts",
                 [["validate"]],
                 1,
@@ -233,8 +234,8 @@ class EvolutionTests(unittest.TestCase):
             self._git(root, "commit", "-m", "baseline")
             reports = iter(
                 [
-                    EvaluationReport(0.7, 0.7, {}, "first", "first.log"),
-                    EvaluationReport(0.6, 0.6, {}, "second", "second.log"),
+                    EvaluationReport(0.7, {}, "first", "first.log"),
+                    EvaluationReport(0.6, {}, "second", "second.log"),
                 ]
             )
 
@@ -250,7 +251,7 @@ class EvolutionTests(unittest.TestCase):
                 root,
                 GitRepository(root, ["src/tinyagent"]),
                 FakeEvaluator(),
-                EvaluationReport(0.5, 0.5, {}, "parent", "parent.log"),
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
                 attempts,
                 [],
                 2,
@@ -267,10 +268,10 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(session.evaluations_used, 2)
 
     def test_promotion_requires_strictly_higher_task_score(self):
-        parent = EvaluationReport(0.8, 0.79, {}, "parent", "parent.log")
-        better_score = EvaluationReport(0.9, 0.70, {}, "candidate", "candidate.log")
-        worse_score = EvaluationReport(0.7, 0.90, {}, "candidate", "candidate.log")
-        equal_score = EvaluationReport(0.8, 0.90, {}, "candidate", "candidate.log")
+        parent = EvaluationReport(0.8, {}, "parent", "parent.log")
+        better_score = EvaluationReport(0.9, {}, "candidate", "candidate.log")
+        worse_score = EvaluationReport(0.7, {}, "candidate", "candidate.log")
+        equal_score = EvaluationReport(0.8, {}, "candidate", "candidate.log")
 
         self.assertTrue(_promotion_decision(parent, better_score)[0])
         self.assertFalse(_promotion_decision(parent, worse_score)[0])
@@ -320,7 +321,7 @@ class EvolutionTests(unittest.TestCase):
                     pass
 
                 def evaluate(self, _output_dir):
-                    return EvaluationReport(1.0, 0.99, {}, "baseline", "baseline.log")
+                    return EvaluationReport(1.0, {}, "baseline", "baseline.log")
 
             with (
                 patch(
@@ -362,7 +363,7 @@ class EvolutionTests(unittest.TestCase):
             )
             config_path = run_dir / "config.json"
             config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
-            report = EvaluationReport(0.5, 0.49, {}, "parent", "parent.log")
+            report = EvaluationReport(0.5, {}, "parent", "parent.log")
             (run_dir / "state.json").write_text(
                 json.dumps(
                     {
@@ -425,10 +426,10 @@ class EvolutionTests(unittest.TestCase):
 
             reports = iter(
                 [
-                    EvaluationReport(0.5, 0.49, {}, "parent", "parent.log"),
-                    EvaluationReport(0.6, 0.495, {}, "child", "child.log"),
-                    EvaluationReport(0.5, 0.49, {}, "fresh-parent", "fresh-parent.log"),
-                    EvaluationReport(0.6, 0.495, {}, "confirmed-child", "confirmed-child.log"),
+                    EvaluationReport(0.5, {}, "parent", "parent.log"),
+                    EvaluationReport(0.6, {}, "child", "child.log"),
+                    EvaluationReport(0.5, {}, "fresh-parent", "fresh-parent.log"),
+                    EvaluationReport(0.6, {}, "confirmed-child", "confirmed-child.log"),
                 ]
             )
 
@@ -504,7 +505,7 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(len(memory), 1)
             self.assertEqual(memory[0]["generation"], 1)
             self.assertEqual(memory[0]["decision"], "accepted")
-            self.assertAlmostEqual(memory[0]["utility_delta"], 0.005)
+            self.assertNotIn("utility_delta", memory[0])
             self.assertTrue(memory[0]["patch_path"].endswith("changes.patch"))
             self.assertIn("VERSION = 1", memory[0]["patch_excerpt"])
             self.assertTrue(memory[0]["outcome_observations"][0]["satisfied"])
@@ -539,11 +540,11 @@ class EvolutionTests(unittest.TestCase):
             config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
             reports = iter(
                 [
-                    EvaluationReport(0.5, 0.49, {}, "parent", "parent.log"),
-                    EvaluationReport(0.7, 0.69, {}, "first", "first.log"),
-                    EvaluationReport(0.6, 0.59, {}, "second", "second.log"),
-                    EvaluationReport(0.5, 0.49, {}, "fresh-parent", "fresh-parent.log"),
-                    EvaluationReport(0.65, 0.64, {}, "confirmed-child", "confirmed-child.log"),
+                    EvaluationReport(0.5, {}, "parent", "parent.log"),
+                    EvaluationReport(0.7, {}, "first", "first.log"),
+                    EvaluationReport(0.6, {}, "second", "second.log"),
+                    EvaluationReport(0.5, {}, "fresh-parent", "fresh-parent.log"),
+                    EvaluationReport(0.65, {}, "confirmed-child", "confirmed-child.log"),
                 ]
             )
 
@@ -615,7 +616,7 @@ class EvolutionTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             config = EvolutionConfig(repo=str(root), run_name="test", branch="evo")
             (run_dir / "config.json").write_text(json.dumps(config.to_dict()), encoding="utf-8")
-            report = EvaluationReport(0.5, 0.49, {}, "parent", "parent.log")
+            report = EvaluationReport(0.5, {}, "parent", "parent.log")
             (run_dir / "state.json").write_text(
                 json.dumps(
                     {
@@ -681,7 +682,7 @@ class EvolutionTests(unittest.TestCase):
             memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
             self.assertEqual(len(memory), 1)
             self.assertEqual(memory[0]["decision"], "rejected")
-            self.assertIsNone(memory[0]["candidate_utility"])
+            self.assertIsNone(memory[0]["candidate_task_score"])
 
     @staticmethod
     def _git(root: Path, *arguments: str) -> None:
@@ -743,7 +744,7 @@ class EvolutionTests(unittest.TestCase):
                 prerequisites=[],
                 confidence=0.8,
             ),
-            available_metrics={"task_score": 0.5, "utility": 0.49},
+            available_metrics={"task_score": 0.5},
             input_tokens=0,
             output_tokens=0,
             raw_output="{}",

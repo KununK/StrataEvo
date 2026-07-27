@@ -12,7 +12,9 @@ from tinyagent import Message, Model, OpenAICompatibleModel
 
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport, EvolutionLayer
+from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
+from .structured import request_json
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig
 
 
@@ -199,47 +201,27 @@ class EvolutionPlanner:
                 + json.dumps(payload, indent=2, ensure_ascii=False),
             ),
         ]
-        attempts: list[str] = []
-        input_tokens = 0
-        output_tokens = 0
-        last_error: ValueError | None = None
-        for attempt_number in range(self.repair_retries + 1):
-            response = self.model.complete(messages, [])
-            attempts.append(response.message.content)
-            input_tokens += response.usage.input_tokens
-            output_tokens += response.usage.output_tokens
-            try:
-                data = _parse_object(response.message.content)
-                plan = EvolutionPlan.from_dict(
-                    data, diagnosis, set(available_metrics), mutable_paths
-                )
-                _validate_promotion_alignment(plan, parent_report)
-            except ValueError as error:
-                last_error = error
-                if attempt_number == self.repair_retries:
-                    break
-                messages.extend(
-                    [
-                        response.message,
-                        Message(
-                            "user",
-                            f"Your plan JSON was invalid: {error}. "
-                            "Correct it and return only JSON.",
-                        ),
-                    ]
-                )
-                continue
-            return EvolutionPlanReport(
-                plan=plan,
-                available_metrics=available_metrics,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                raw_output=response.message.content,
-                attempts=attempts,
-            )
-        raise ValueError(
-            f"evolution plan remained invalid after {len(attempts)} attempt(s): {last_error}"
-        ) from last_error
+
+        def parse(data: dict[str, Any]) -> EvolutionPlan:
+            plan = EvolutionPlan.from_dict(data, diagnosis, set(available_metrics), mutable_paths)
+            _validate_promotion_alignment(plan, parent_report)
+            return plan
+
+        response = request_json(
+            self.model,
+            messages,
+            parse,
+            label="evolution plan",
+            repair_retries=self.repair_retries,
+        )
+        return EvolutionPlanReport(
+            plan=response.value,
+            available_metrics=available_metrics,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            raw_output=response.raw_output,
+            attempts=response.attempts,
+        )
 
 
 PLANNER_SYSTEM_PROMPT = """You plan one intervention for a self-evolving software agent.
@@ -336,14 +318,13 @@ def plan_evolution(
         existing_files=existing_files,
         evaluation_contract=evaluation_contract,
     )
-    _write_json(Path(destination), report.to_dict())
+    write_json(destination, report.to_dict())
     return report
 
 
 def evaluation_metrics(report: dict[str, Any]) -> dict[str, float]:
     values = {
         "task_score": float(report["task_score"]),
-        "utility": float(report["utility"]),
     }
     metrics = report.get("metrics") or {}
     for name, value in metrics.items():
@@ -420,26 +401,6 @@ def _metric_value(metrics: dict[str, float], name: str, *, report_exists: bool) 
     return metrics.get(name)
 
 
-def _parse_object(text: str) -> dict[str, Any]:
-    content = text.strip()
-    if content.startswith("```"):
-        lines = content.splitlines()
-        lines = lines[1:] if lines and lines[0].startswith("```") else lines
-        lines = lines[:-1] if lines and lines[-1].strip() == "```" else lines
-        content = "\n".join(lines).strip()
-    start = content.find("{")
-    end = content.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("plan response does not contain a JSON object")
-    try:
-        data = json.loads(content[start : end + 1])
-    except json.JSONDecodeError as error:
-        raise ValueError(f"plan response contains invalid JSON: {error}") from error
-    if not isinstance(data, dict):
-        raise ValueError("plan response must be a JSON object")
-    return data
-
-
 def _required_text(data: dict[str, Any], field_name: str) -> str:
     value = str(data.get(field_name, "")).strip()
     if not value:
@@ -461,10 +422,3 @@ def _is_mutable_path(path: str, mutable_paths: list[str]) -> bool:
         candidate == root or root in candidate.parents
         for root in (PurePosixPath(item) for item in mutable_paths)
     )
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)

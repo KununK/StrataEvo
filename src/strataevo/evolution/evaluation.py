@@ -104,8 +104,6 @@ class BenchmarkEvaluator:
             str(output_dir),
             "--offset",
             str(self.config.eval_offset),
-            "--limit",
-            str(self.config.eval_limit),
             "--workers",
             str(self.config.eval_workers),
             "--max-steps",
@@ -115,35 +113,25 @@ class BenchmarkEvaluator:
             "--no-resume",
             *self.spec.arguments,
         ]
+        if self.config.eval_limit is not None:
+            command.extend(["--limit", str(self.config.eval_limit)])
         log_path = output_dir.parent / f"{output_dir.name}.log"
         passed, output = run_commands([command], self.repo, log_path, timeout=7_200)
         summary_path = output_dir / "summary.json"
         if not passed or not summary_path.is_file():
-            raise RuntimeError(
-                f"{self.spec.display_name} failed; see {log_path}\n{output[-2000:]}"
-            )
+            raise RuntimeError(f"{self.spec.display_name} failed; see {log_path}\n{output[-2000:]}")
         metrics = json.loads(summary_path.read_text(encoding="utf-8"))
         evidence = CodingAgentEvidenceCollector(self.spec.name).collect_and_write(output_dir)
+        task_score = float(metrics["pass_at_1"])
         evaluated = max(int(metrics.get("evaluated", 0)), 1)
-        average_tokens = (
+        metrics["average_tokens"] = (
             metrics.get("total_input_tokens", 0) + metrics.get("total_output_tokens", 0)
         ) / evaluated
-        task_score = float(metrics["pass_at_1"])
-        utility = (
-            task_score
-            - self.config.step_penalty * float(metrics.get("average_agent_steps", 0.0))
-            - self.config.token_penalty * average_tokens
-        )
-        metrics["average_tokens"] = average_tokens
-        metrics["utility"] = utility
         metrics["evidence_path"] = str(output_dir / "evidence.json")
         metrics["evidence_signal_counts"] = evidence.signal_counts
         metrics["evaluation_contract"] = self.contract.to_dict()
-        print(
-            f"[evolution] pass@1={task_score:.4f} utility={utility:.6f}",
-            flush=True,
-        )
-        return EvaluationReport(task_score, utility, metrics, str(output_dir), str(log_path))
+        print(f"[evolution] pass@1={task_score:.4f}", flush=True)
+        return EvaluationReport(task_score, metrics, str(output_dir), str(log_path))
 
 
 HUMANEVAL = BenchmarkSpec(
