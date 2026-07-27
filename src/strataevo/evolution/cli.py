@@ -12,7 +12,7 @@ from typing import Any
 
 from .attempts import CandidateEvaluationSession
 from .diagnosis import DiagnosisReport, diagnose_evaluation
-from .evaluation import HumanEvalEvaluator, validation_commands
+from .evaluation import BENCHMARKS, Evaluator, create_evaluator, validation_commands
 from .git import GitRepository
 from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .mutator import mutate
@@ -27,6 +27,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo", default=".")
     parser.add_argument("--run-name")
     parser.add_argument("--branch", default="evo")
+    parser.add_argument("--benchmark", choices=tuple(BENCHMARKS), default="humaneval")
     parser.add_argument("--generations", type=int, default=1)
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
@@ -70,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
             repo=str(repo),
             run_name=run_name,
             branch=args.branch,
+            benchmark=args.benchmark,
             generations=args.generations,
             model=args.model,
             base_url=args.base_url,
@@ -129,7 +131,7 @@ def run_one_generation(config_path: Path) -> int:
     if current_branch != config.branch:
         raise RuntimeError(f"expected branch {config.branch!r}, found {current_branch!r}")
 
-    evaluator = HumanEvalEvaluator(repo, config)
+    evaluator = create_evaluator(repo, config)
     _write_json(run_dir / "evaluation_contract.json", evaluator.contract.to_dict())
     state = _load_or_create_state(state_path, git, evaluator, run_dir)
     parent_report = EvaluationReport.from_dict(state["current_report"])
@@ -329,7 +331,7 @@ def run_one_generation(config_path: Path) -> int:
 def _load_or_create_state(
     path: Path,
     git: GitRepository,
-    evaluator: HumanEvalEvaluator,
+    evaluator: Evaluator,
     run_dir: Path,
 ) -> dict[str, Any]:
     if path.exists():

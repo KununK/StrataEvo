@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from strataevo.evolution.evidence import (
+    CodingAgentEvidenceCollector,
     EvidenceBundle,
     HumanEvalEvidenceCollector,
     TaskEvidence,
@@ -90,6 +91,15 @@ class EvidenceCollectorTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "task mismatch"):
                 HumanEvalEvidenceCollector().collect(root)
+
+    def test_generic_collector_records_active_benchmark(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_fixture(root)
+
+            bundle = CodingAgentEvidenceCollector("mbpp").collect(root)
+
+            self.assertEqual(bundle.evaluator, "mbpp")
 
     @staticmethod
     def _write_fixture(root: Path) -> None:

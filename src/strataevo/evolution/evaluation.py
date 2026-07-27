@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from .contract import EvaluationContract
-from .evidence import HumanEvalEvidenceCollector
+from .evidence import CodingAgentEvidenceCollector
 from .types import EvaluationReport, EvolutionConfig
 
 
@@ -17,6 +18,17 @@ class Evaluator(Protocol):
     contract: EvaluationContract
 
     def evaluate(self, output_dir: Path) -> EvaluationReport: ...
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkSpec:
+    name: str
+    display_name: str
+    module: str
+    objective: str
+    direct_paths: tuple[str, ...] = ("src/tinyagent",)
+    deferred_paths: tuple[str, ...] = ("src/strataevo/evolution/mutator.py",)
+    arguments: tuple[str, ...] = ()
 
 
 def validation_commands(repo: Path) -> list[list[str]]:
@@ -61,23 +73,29 @@ def run_commands(
     return passed, text
 
 
-class HumanEvalEvaluator:
-    def __init__(self, repo: Path, config: EvolutionConfig) -> None:
+class BenchmarkEvaluator:
+    """Run one Agent benchmark and normalize its artifacts for evolution."""
+
+    def __init__(self, repo: Path, config: EvolutionConfig, spec: BenchmarkSpec) -> None:
         self.repo = repo
         self.config = config
+        self.spec = spec
         self.contract = EvaluationContract(
-            benchmark="HumanEval",
-            objective="Improve the task-solving Tinyagent measured by HumanEval pass@1.",
-            direct_paths=("src/tinyagent",),
-            deferred_paths=("src/strataevo/evolution/mutator.py",),
+            benchmark=spec.display_name,
+            objective=spec.objective,
+            direct_paths=spec.direct_paths,
+            deferred_paths=spec.deferred_paths,
         )
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:
-        print(f"[evolution] evaluating agent -> {output_dir}", flush=True)
+        print(
+            f"[evolution] evaluating {self.spec.display_name} -> {output_dir}",
+            flush=True,
+        )
         command = [
             sys.executable,
             "-m",
-            "eval.humaneval.run",
+            self.spec.module,
             "--model",
             self.config.model,
             "--base-url",
@@ -95,14 +113,17 @@ class HumanEvalEvaluator:
             "--test-timeout",
             str(self.config.test_timeout),
             "--no-resume",
+            *self.spec.arguments,
         ]
         log_path = output_dir.parent / f"{output_dir.name}.log"
         passed, output = run_commands([command], self.repo, log_path, timeout=7_200)
         summary_path = output_dir / "summary.json"
         if not passed or not summary_path.is_file():
-            raise RuntimeError(f"HumanEval failed; see {log_path}\n{output[-2000:]}")
+            raise RuntimeError(
+                f"{self.spec.display_name} failed; see {log_path}\n{output[-2000:]}"
+            )
         metrics = json.loads(summary_path.read_text(encoding="utf-8"))
-        evidence = HumanEvalEvidenceCollector().collect_and_write(output_dir)
+        evidence = CodingAgentEvidenceCollector(self.spec.name).collect_and_write(output_dir)
         evaluated = max(int(metrics.get("evaluated", 0)), 1)
         average_tokens = (
             metrics.get("total_input_tokens", 0) + metrics.get("total_output_tokens", 0)
@@ -123,3 +144,31 @@ class HumanEvalEvaluator:
             flush=True,
         )
         return EvaluationReport(task_score, utility, metrics, str(output_dir), str(log_path))
+
+
+HUMANEVAL = BenchmarkSpec(
+    name="humaneval",
+    display_name="HumanEval",
+    module="eval.humaneval.run",
+    objective="Improve the task-solving Tinyagent measured by HumanEval pass@1.",
+)
+
+MBPP = BenchmarkSpec(
+    name="mbpp",
+    display_name="MBPP",
+    module="eval.mbpp.run",
+    objective="Improve the task-solving Tinyagent measured by MBPP pass@1.",
+)
+
+BENCHMARKS = {
+    HUMANEVAL.name: HUMANEVAL,
+    MBPP.name: MBPP,
+}
+
+
+def create_evaluator(repo: Path, config: EvolutionConfig) -> BenchmarkEvaluator:
+    try:
+        spec = BENCHMARKS[config.benchmark]
+    except KeyError as error:
+        raise ValueError(f"unknown benchmark: {config.benchmark}") from error
+    return BenchmarkEvaluator(repo, config, spec)

@@ -11,7 +11,7 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel
 
-from .evidence import EvidenceBundle, HumanEvalEvidenceCollector, TaskEvidence
+from .evidence import EvidenceBundle, TaskEvidence
 from .memory import EvolutionMemoryEntry, memory_context
 from .types import EvaluationReport, EvolutionConfig
 
@@ -205,7 +205,10 @@ def diagnose_evaluation(
     destination: str | Path,
     history: list[EvolutionMemoryEntry] | None = None,
 ) -> DiagnosisReport:
-    bundle = HumanEvalEvidenceCollector().collect(report.output_dir)
+    evidence_path = Path(
+        report.metrics.get("evidence_path", Path(report.output_dir) / "evidence.json")
+    )
+    bundle = EvidenceBundle.from_dict(json.loads(evidence_path.read_text(encoding="utf-8")))
     model = OpenAICompatibleModel(
         model=config.model,
         base_url=config.base_url,
@@ -320,15 +323,16 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Diagnose HumanEval evidence by evolution layer")
-    parser.add_argument("output_dir", help="HumanEval output directory")
+    parser = argparse.ArgumentParser(description="Diagnose benchmark evidence by evolution layer")
+    parser.add_argument("output_dir", help="benchmark output directory")
     parser.add_argument("--output", help="Diagnosis JSON path")
     parser.add_argument("--model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--max-cases", type=int, default=40)
     parser.add_argument("--repair-retries", type=int, default=1)
     args = parser.parse_args(argv)
-    bundle = HumanEvalEvidenceCollector().collect(args.output_dir)
+    evidence_path = Path(args.output_dir) / "evidence.json"
+    bundle = EvidenceBundle.from_dict(json.loads(evidence_path.read_text(encoding="utf-8")))
     model = OpenAICompatibleModel(model=args.model, base_url=args.base_url, temperature=0.0)
     report = EvidenceDiagnoser(
         model, max_cases=args.max_cases, repair_retries=args.repair_retries

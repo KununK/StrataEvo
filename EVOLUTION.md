@@ -17,7 +17,7 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
   -> 在新的 Python 进程中启动下一代
 ```
 
-这里的自进化与 HumanEval 候选代码生成不同。`solution.py` 是 Agent 针对某道任务生成的
+这里的自进化与 benchmark 候选代码生成不同。`solution.py` 是 Agent 针对某道任务生成的
 答案，而一次自进化会修改 StrataEvo 自身的实现。
 
 ## 演化边界
@@ -47,22 +47,22 @@ src/strataevo/evolution/git.py  Git 提交和回滚
 ## Evaluation Contract
 
 可写不代表可以被当前 benchmark 评价。每个 Evaluator 必须声明一份 Evaluation Contract，
-说明当前目标以及代码修改的生效范围。HumanEval 当前声明：
+说明当前目标以及代码修改的生效范围。HumanEval 和 MBPP 当前都声明：
 
 ```text
 direct_paths
   src/tinyagent/
-  HumanEval 子进程会加载，能够用本轮 pass@1 评价
+  benchmark 子进程会加载，能够用本轮 pass@1 评价
 
 deferred_paths
   src/strataevo/evolution/mutator.py
-  只会改变后续自修改过程，本轮 HumanEval 不会加载
+  只会改变后续自修改过程，本轮 benchmark 不会加载
 ```
 
 候选只有全部修改都位于 `direct_paths` 时才会进入当前 benchmark。仅修改
 `deferred_paths`、混合修改两个范围或者包含未分类路径的候选，都会返回结构化反馈、恢复
 父代或已有最佳候选，并且不消耗探索性 benchmark 配额。`mutator.py` 仍然保留在可演化
-范围，但需要未来独立的 Evolver 评测契约验证，不能用即时 HumanEval 波动证明其改进。
+范围，但需要未来独立的 Evolver 评测契约验证，不能用即时 benchmark 波动证明其改进。
 
 每次运行使用的契约保存在 `evolution/runs/<run_name>/evaluation_contract.json`。
 
@@ -74,6 +74,7 @@ deferred_paths
 strataevo \
   --run-name humaneval-dev \
   --branch evo_test_inter \
+  --benchmark humaneval \
   --generations 1 \
   --eval-limit 5
 ```
@@ -97,7 +98,8 @@ strataevo \
 --mutator-max-steps       Meta-Agent 修改自身时允许的最大模型/工具轮数
 --mutator-rounds          每代最多进行的连续修改反馈轮数
 --max-eval-attempts       每代最多进行的候选 benchmark 次数
---eval-offset             HumanEval 开发任务的起始位置
+--benchmark               评测集：humaneval 或 mbpp
+--eval-offset             benchmark 开发任务的起始位置
 --eval-limit              使用的开发任务数量
 --eval-workers            同时发送给 vLLM 的评测 Agent 数量
 --benchmark-max-steps     每个被评测 Agent 的最大工具循环步数
@@ -130,13 +132,13 @@ evaluate_candidate  验证并评测当前候选，将结果返回当前自修改
 
 Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选择一项具体限制进行修改。
 修改首先保留在当前 Git 工作区中，不会立即成为新一代。它可以调用
-`evaluate_candidate` 获得当前候选的 HumanEval 结果和 Evidence 路径，再在同一会话中继续
+`evaluate_candidate` 获得当前候选的 benchmark 结果和 Evidence 路径，再在同一会话中继续
 修正，默认每代最多评测 5 个候选状态。
 
 为避免模型耗尽全部 step 后才尝试评测，控制器还会强制把整代预算划分为连续 refinement
 round。每轮 step 上限根据剩余总预算和剩余 round 数动态均分。默认 200 steps、5 rounds
 时初始上限为每轮 40；如果某轮提前结束，未使用的预算会滚入后续轮次。每轮结束后控制器
-自动检查当前 diff，并把验证或 HumanEval 结果追加到同一个 session 后再启动下一轮；模型
+自动检查当前 diff，并把验证或 benchmark 结果追加到同一个 session 后再启动下一轮；模型
 主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
 
 每次 attempt 的 patch、固定验证日志、评测目录和结果保存在：
@@ -159,7 +161,7 @@ round 反馈，同时避免从多次随机生成中直接选择最高值造成�
 
 ## 晋级规则
 
-HumanEval 的 pass@1 是当前唯一的任务晋级指标。效用仍会作为观测数据记录 Agent 步数和
+所选 benchmark 的 pass@1 是当前唯一的任务晋级指标。效用仍会作为观测数据记录 Agent 步数和
 Token 消耗：
 
 ```text
@@ -249,7 +251,7 @@ evolution/runs/<run_name>/
 - `promotion/comparison.json`：探索最佳结果、新鲜父代结果和候选确认结果；
 - `record.json`：父代、本代最佳候选、全部 attempts、晋级决定和原因；
 - `attempt-NNNN/validation.log`：Ruff、pytest 和 CLI 检查输出；
-- `attempt-NNNN/evaluation/`：该候选的 HumanEval 代码、session 和结果；
+- `attempt-NNNN/evaluation/`：该候选的代码、session 和 benchmark 结果；
 - `attempt-NNNN/evaluation/evidence.json`：该候选的结构化评测证据；
 - `generation-XXXX-failed-XXXX/`：模型请求、诊断或执行异常时保留的未完成代。
 
@@ -261,7 +263,7 @@ evolution/runs/<run_name>/
 
 ## 结构化评测证据
 
-HumanEval 完成后，`HumanEvalEvidenceCollector` 会关联以下文件：
+任一 coding-agent benchmark 完成后，`CodingAgentEvidenceCollector` 会关联以下文件：
 
 ```text
 summary.json

@@ -1,4 +1,4 @@
-"""Structured evidence extracted from HumanEval evaluation artifacts."""
+"""Structured evidence extracted from coding-agent benchmark artifacts."""
 
 from __future__ import annotations
 
@@ -86,10 +86,13 @@ class EvidenceBundle:
         return cls(**values)
 
 
-class HumanEvalEvidenceCollector:
-    """Join HumanEval results, generations, candidates, and sessions."""
+class CodingAgentEvidenceCollector:
+    """Join task results, generations, candidates, and sessions."""
 
     artifact_name = "solution.py"
+
+    def __init__(self, evaluator: str) -> None:
+        self.evaluator = evaluator
 
     def collect(self, output_dir: str | Path) -> EvidenceBundle:
         root = Path(output_dir).resolve()
@@ -100,7 +103,7 @@ class HumanEvalEvidenceCollector:
             missing_results = sorted(set(generations).difference(results))
             missing_generations = sorted(set(results).difference(generations))
             raise ValueError(
-                "HumanEval result/generation task mismatch: "
+                f"{self.evaluator} result/generation task mismatch: "
                 f"missing_results={missing_results}, missing_generations={missing_generations}"
             )
 
@@ -117,7 +120,7 @@ class HumanEvalEvidenceCollector:
             for signal in case.signals:
                 signal_counts[signal] = signal_counts.get(signal, 0) + 1
         return EvidenceBundle(
-            evaluator="humaneval",
+            evaluator=self.evaluator,
             source_dir=str(root),
             summary=summary,
             signal_counts=dict(sorted(signal_counts.items())),
@@ -202,6 +205,11 @@ class HumanEvalEvidenceCollector:
                     if _shell_attempts_delete(command, self.artifact_name):
                         delete_attempted = True
         return sequence, shell_commands, created, delete_attempted
+
+
+class HumanEvalEvidenceCollector(CodingAgentEvidenceCollector):
+    def __init__(self) -> None:
+        super().__init__("humaneval")
 
 
 def _signals(
@@ -304,11 +312,14 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Collect structured HumanEval evidence")
-    parser.add_argument("output_dir", help="HumanEval output directory")
+    parser = argparse.ArgumentParser(description="Collect structured benchmark evidence")
+    parser.add_argument("output_dir", help="benchmark output directory")
+    parser.add_argument("--benchmark", choices=("humaneval", "mbpp"), default="humaneval")
     parser.add_argument("--output", help="Evidence JSON path; defaults to OUTPUT_DIR/evidence.json")
     args = parser.parse_args(argv)
-    bundle = HumanEvalEvidenceCollector().collect_and_write(args.output_dir, args.output)
+    bundle = CodingAgentEvidenceCollector(args.benchmark).collect_and_write(
+        args.output_dir, args.output
+    )
     print(
         json.dumps(
             {

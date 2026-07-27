@@ -37,6 +37,7 @@ TEST_CONTRACT = EvaluationContract(
 class EvolutionTests(unittest.TestCase):
     def test_mutator_default_reserves_repair_budget(self):
         args = parse_args([])
+        self.assertEqual(args.benchmark, "humaneval")
         self.assertEqual(args.mutator_max_steps, 200)
         self.assertEqual(args.mutator_rounds, 5)
         self.assertEqual(args.max_eval_attempts, 5)
@@ -310,7 +311,10 @@ class EvolutionTests(unittest.TestCase):
                     return EvaluationReport(1.0, 0.99, {}, "baseline", "baseline.log")
 
             with (
-                patch("strataevo.evolution.cli.HumanEvalEvaluator", FullScoreEvaluator),
+                patch(
+                    "strataevo.evolution.cli.create_evaluator",
+                    return_value=FullScoreEvaluator(root, config),
+                ),
                 patch("strataevo.evolution.cli.diagnose_evaluation") as diagnose,
             ):
                 self.assertEqual(run_one_generation(config_path), 0)
@@ -466,7 +470,10 @@ class EvolutionTests(unittest.TestCase):
                 )
 
             with (
-                patch("strataevo.evolution.cli.HumanEvalEvaluator", FakeEvaluator),
+                patch(
+                    "strataevo.evolution.cli.create_evaluator",
+                    return_value=FakeEvaluator(root, config),
+                ),
                 patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
                 patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
                 patch("strataevo.evolution.cli.validation_commands", return_value=[]),
@@ -549,7 +556,10 @@ class EvolutionTests(unittest.TestCase):
                 )
 
             with (
-                patch("strataevo.evolution.cli.HumanEvalEvaluator", FakeEvaluator),
+                patch(
+                    "strataevo.evolution.cli.create_evaluator",
+                    return_value=FakeEvaluator(root, config),
+                ),
                 patch(
                     "strataevo.evolution.cli.diagnose_evaluation",
                     return_value=self._diagnosis_report(),

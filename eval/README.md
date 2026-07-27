@@ -1,5 +1,9 @@
 # Agent Evaluation
 
+HumanEval 和 MBPP 共用同一套 coding-agent harness：每道题使用独立 Workspace 和
+session，Agent 必须读取 `task.py` 并生成 `solution.py`。两个 benchmark 输出相同结构的
+任务轨迹、判题结果、汇总和 Evidence，数据集差异由各自的 loader 和判题器处理。
+
 ## HumanEval
 
 HumanEval 使用 `openai/openai_humaneval` 的 164 个 Python 任务。每道题运行一个全新的 Tinyagent：
@@ -82,3 +86,35 @@ python -m eval.humaneval.run \
 ```
 
 候选代码和 Agent 的 Shell 工具都会执行模型生成的代码。当前实现使用临时目录、`python -I` 和超时，但不是安全沙箱；只应评测可信模型，严格隔离需要容器或虚拟机。
+
+## MBPP
+
+MBPP 默认使用 `google-research-datasets/mbpp` 的 `sanitized/test`。自然语言描述、
+目标函数名和公开测试会以 Python 数据写入只读的 `task.py`。判题器组合数据集 imports、
+setup、候选源码和测试断言，然后在独立的 `python -I` 子进程中执行。
+
+5 题 smoke 测试：
+
+```bash
+LIMIT=5 FORCE_RERUN=1 ./eval/run_mbpp.sh
+```
+
+完整独立评测：
+
+```bash
+./eval/run_mbpp.sh
+```
+
+覆盖参数：
+
+```bash
+MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct \
+BASE_URL=http://localhost:8000/v1 \
+RUN_NAME=qwen3-coder-mbpp-v1 \
+WORKERS=8 \
+./eval/run_mbpp.sh --max-steps 12 --test-timeout 15
+```
+
+本实现参考 CodeSensiQuant 的 MBPP 数据字段和测试程序构造，但不复用其 Transformers
+直接生成流程，也不加入其三样例提示。这里让每道题经过 Tinyagent 工具循环，以保持不同
+benchmark 的 Agent 行为、Evidence 和自进化反馈结构一致。

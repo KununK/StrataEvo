@@ -13,6 +13,7 @@ class EvolutionConfig:
     repo: str
     run_name: str
     branch: str = "evo"
+    benchmark: str = "humaneval"
     generations: int = 1
     model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
     base_url: str = "http://localhost:8000/v1"

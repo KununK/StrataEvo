@@ -167,9 +167,9 @@ StrataEvo 现在支持代码库级递归自进化：系统先将候选代码、�
 结构化 Evidence，再由模型在 Model、Context、Tools 和 Architecture 四层中诊断主要
 演化对象。Evolution Planner 从诊断中选择一项可检验的干预，再由 Tinyagent 运行实例承担的
 自修改角色执行。自修改 Agent 可以在同一代内调用只读的 `evaluate_candidate`，根据固定测试、
-HumanEval 结果和 Evidence 连续修正候选，默认每代最多评测 5 次，整代共享 200 个
-Mutator step。Evaluation Contract 会区分当前 HumanEval 可直接观察的 Tinyagent 修改和只在
-后续代生效的 Evolver 修改，后者不能使用本代 HumanEval 分数晋级。控制器用代内结果筛选
+所选 benchmark 的结果和 Evidence 连续修正候选，默认每代最多评测 5 次，整代共享 200 个
+Mutator step。Evaluation Contract 会区分当前 benchmark 可直接观察的 Tinyagent 修改和只在
+后续代生效的 Evolver 修改，后者不能使用本代 benchmark 分数晋级。控制器用代内结果筛选
 候选后，会重新评测一次父代和候选；只有这组未参与筛选的新结果仍然提升才会提交，否则自动
 回滚。下一代由新的 Python 进程加载修改后的源码。每个完成代的诊断、计划、各次候选修改、
 修改生效范围、确认结果及接受或拒绝结果会写入
@@ -182,11 +182,13 @@ Planner 会看到实际可修改源码清单，执行器支持精确文本替换
 strataevo \
   --run-name humaneval-dev \
   --branch evo_test_inter \
+  --benchmark humaneval \
   --generations 1 \
   --eval-limit 5
 ```
 
-这里修改的是 Agent 自身源码，不是 HumanEval 的 `solution.py`。设计边界、晋级条件、
+`--benchmark` 当前支持 `humaneval` 和 `mbpp`。这里修改的是 Agent 自身源码，不是评测任务
+中的 `solution.py`。设计边界、晋级条件、
 断点续跑和输出结构见 [`EVOLUTION.md`](EVOLUTION.md)。
 
 ## 工具与安全边界
@@ -213,10 +215,11 @@ uv run pytest
 
 ## Agent 评测
 
-HumanEval Agent 评测位于 `eval/`。先启动 vLLM，再运行 smoke 测试：
+HumanEval 和 MBPP Agent 评测位于 `eval/`。先启动 vLLM，再运行 smoke 测试：
 
 ```bash
 LIMIT=5 FORCE_RERUN=1 ./eval/run_humaneval.sh
+LIMIT=5 FORCE_RERUN=1 ./eval/run_mbpp.sh
 ```
 
 完整说明见 [`eval/README.md`](eval/README.md)。
