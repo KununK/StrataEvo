@@ -169,12 +169,14 @@ class SelfWorkspace:
             return self._limit("\n\n".join(outputs))
 
         @tool(requires_approval=True)
-        def format_code(path: str = ".") -> str:
-            """Apply Ruff's safe fixes and formatter to a project file or directory."""
+        def format_code(path: str) -> str:
+            """Apply Ruff's safe fixes and formatter to one Python file."""
             target = self._resolve_mutable(path)
+            if not target.is_file() or target.suffix != ".py":
+                raise ValueError("format_code requires an existing Python file")
             if not self.ruff.is_file():
                 raise FileNotFoundError(self.ruff)
-            relative = target.relative_to(self.root).as_posix() or "."
+            relative = target.relative_to(self.root).as_posix()
             commands = [
                 [str(self.ruff), "check", relative, "--fix"],
                 [str(self.ruff), "format", relative],
@@ -236,6 +238,9 @@ class SelfWorkspace:
         if not any(target.is_relative_to(root) for root in self.mutable_roots):
             raise PermissionError(f"path is outside evolvable project: {path}")
         relative = target.relative_to(self.root).as_posix()
+        relative_parts = target.relative_to(self.root).parts
+        if any(part in HIDDEN_ROOTS or part.endswith(".egg-info") for part in relative_parts):
+            raise PermissionError(f"path is protected runtime state: {path}")
         if any(
             relative == root or relative.startswith(root + "/") for root in PROTECTED_WRITE_ROOTS
         ):

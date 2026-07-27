@@ -151,6 +151,12 @@ class EvolutionTests(unittest.TestCase):
                 tools["write_file"].run({"path": "evolution/runs/result.json", "content": "{}\n"})
             with self.assertRaises(PermissionError):
                 tools["format_code"].run({"path": "evolution/runs"})
+            with self.assertRaises(ValueError):
+                tools["format_code"].run({"path": "src/tinyagent"})
+            with self.assertRaises(PermissionError):
+                tools["write_file"].run(
+                    {"path": "src/tinyagent/__pycache__/agent.pyc", "content": "cache"}
+                )
             with self.assertRaises(PermissionError):
                 tools["read_file"].run({"path": ".git/config"})
             with self.assertRaises(PermissionError):
@@ -183,6 +189,27 @@ class EvolutionTests(unittest.TestCase):
 
             self.assertEqual(existing.read_text(encoding="utf-8"), "OLD = True\n")
             self.assertFalse(added.exists())
+            repository.ensure_clean()
+
+    def test_capture_patch_leaves_candidate_only_in_worktree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "agent.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            repository = GitRepository(root, ["."])
+
+            source.unlink()
+            patch = repository.capture_patch()
+
+            self.assertIn("deleted file mode", patch)
+            self.assertEqual(self._git_output(root, "diff", "--cached", "--name-only"), "")
+            self.assertEqual(repository.changed_paths(), ["agent.py"])
+            repository.rollback()
             repository.ensure_clean()
 
     def test_git_repository_can_stage_after_a_staged_deletion(self):
@@ -231,6 +258,12 @@ class EvolutionTests(unittest.TestCase):
             environment_file = root / ".venv/bin/python"
             environment_file.parent.mkdir(parents=True)
             environment_file.write_text("runtime\n", encoding="utf-8")
+            cache = root / "src/pkg/__pycache__/module.cpython-312.pyc"
+            cache.parent.mkdir(parents=True)
+            cache.write_bytes(b"cache")
+            metadata = root / "src/pkg.egg-info/PKG-INFO"
+            metadata.parent.mkdir(parents=True)
+            metadata.write_text("generated\n", encoding="utf-8")
             repository = GitRepository(root, ["."])
 
             self.assertEqual(repository.changed_paths(), [".gitignore"])
@@ -239,6 +272,8 @@ class EvolutionTests(unittest.TestCase):
             repository.rollback()
             self.assertTrue(output.is_file())
             self.assertTrue(environment_file.is_file())
+            self.assertTrue(cache.is_file())
+            self.assertTrue(metadata.is_file())
 
     def test_validation_failure_does_not_use_benchmark_budget(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -113,7 +113,7 @@ replace_text     精确修改源码
 replace_lines    按 read_file 返回的闭区间行号替换源码
 delete_file      删除可演化文件
 show_diff        查看当前自身修改
-format_code      对指定项目路径运行 Ruff 自动修复和格式化
+format_code      对一个 Python 文件运行 Ruff 自动修复和格式化
 run_validation   运行固定检查
 evaluate_candidate  验证并评测当前候选，将结果返回当前自修改会话
 ```

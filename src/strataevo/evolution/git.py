@@ -7,6 +7,16 @@ from pathlib import Path
 
 from .workspace import PROTECTED_WRITE_ROOTS, remove_path
 
+PROTECTED_GIT_PATHS = (
+    ":(glob,exclude)**/__pycache__/**",
+    ":(glob,exclude)**/*.py[cod]",
+    ":(glob,exclude)**/*.egg-info/**",
+    ":(glob,exclude)**/.env",
+    ":(glob,exclude)**/.env.*",
+    ":(glob,exclude)**/*.key",
+    ":(glob,exclude)**/*.pem",
+)
+
 
 class GitRepository:
     def __init__(self, root: str | Path, mutable_paths: list[str]) -> None:
@@ -45,16 +55,26 @@ class GitRepository:
         if paths:
             self._run(["add", "-A", "--", *paths], capture=True)
 
+    def capture_patch(self) -> str:
+        """Return the complete candidate patch while leaving only worktree changes."""
+        self.stage()
+        patch = self.staged_diff()
+        staged = self._staged_paths()
+        if staged:
+            self._run(["restore", "--staged", "--", *staged], capture=True)
+        return patch
+
     def staged_diff(self) -> str:
         return self._run(["diff", "--cached", "--binary", "--", *self._pathspecs()], capture=True)
 
     def commit(self, message: str) -> str:
+        self.stage()
         self._run(["commit", "-m", message])
         return self.head()
 
     def apply_patch(self, patch_path: Path) -> None:
         completed = subprocess.run(
-            ["git", "apply", "--index", "--binary", str(patch_path)],
+            ["git", "apply", "--binary", str(patch_path)],
             cwd=self.root,
             capture_output=True,
             text=True,
@@ -73,10 +93,7 @@ class GitRepository:
                 remove_path(target)
 
     def _tracked_paths(self) -> list[str]:
-        staged = self._run(
-            ["diff", "--cached", "--name-only", "--", *self._pathspecs()], capture=True
-        ).splitlines()
-        return sorted(set(filter(None, [*self._worktree_paths(), *staged])))
+        return sorted(set(filter(None, [*self._worktree_paths(), *self._staged_paths()])))
 
     def _worktree_paths(self) -> list[str]:
         return self._run(
@@ -89,9 +106,14 @@ class GitRepository:
             capture=True,
         ).splitlines()
 
+    def _staged_paths(self) -> list[str]:
+        return self._run(
+            ["diff", "--cached", "--name-only", "--", *self._pathspecs()], capture=True
+        ).splitlines()
+
     def _pathspecs(self) -> list[str]:
         excluded = [f":(exclude){path}" for path in sorted(PROTECTED_WRITE_ROOTS)]
-        return [*self.mutable_paths, *excluded]
+        return [*self.mutable_paths, *excluded, *PROTECTED_GIT_PATHS]
 
     def _run(self, arguments: list[str], *, capture: bool = False) -> str:
         completed = subprocess.run(

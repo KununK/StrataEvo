@@ -91,8 +91,7 @@ class CandidateEvaluationSession:
             )
 
         self._working_tree_state = "current_candidate"
-        self.git.stage()
-        patch = self.git.staged_diff()
+        patch = self.git.capture_patch()
         duplicate = self._find_patch(patch)
         if duplicate is not None:
             best = self._best_improving_attempt()
@@ -205,8 +204,7 @@ class CandidateEvaluationSession:
         """Evaluate once when the mutator edited code but never requested feedback."""
         if self.evaluations_used >= self.max_evaluations or not self.git.changed_paths():
             return
-        self.git.stage()
-        current_patch = self.git.staged_diff()
+        current_patch = self.git.capture_patch()
         last_patch = self.attempts[-1].patch_path if self.attempts else None
         if not last_patch or Path(last_patch).read_text(encoding="utf-8") != current_patch:
             self.evaluate()
