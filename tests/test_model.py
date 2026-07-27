@@ -73,6 +73,30 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(sent["messages"][0]["content"], "find papers")
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
 
+    @patch("urllib.request.urlopen")
+    def test_empty_tool_result_is_sent_as_a_string(self, urlopen):
+        urlopen.return_value = FakeResponse(
+            {
+                "choices": [{"message": {"role": "assistant", "content": "done"}}],
+                "usage": {},
+            }
+        )
+        model = OpenAICompatibleModel("test-model", base_url="http://model.test/v1")
+        messages = [
+            Message(
+                "assistant",
+                tool_calls=[ToolCall("call_1", "read_file", {"path": "empty.py"})],
+            ),
+            Message("tool", "", tool_call_id="call_1", name="read_file"),
+        ]
+
+        model.complete(messages, [])
+
+        request = urlopen.call_args.args[0]
+        sent = json.loads(request.data)["messages"]
+        self.assertIsNone(sent[0]["content"])
+        self.assertEqual(sent[1]["content"], "")
+
     @patch.dict(os.environ, {"OPENAI_BASE_URL": "http://environment.test/v1"})
     def test_explicit_base_url_has_priority_over_environment(self):
         model = OpenAICompatibleModel("test-model", base_url="http://explicit.test/v1")

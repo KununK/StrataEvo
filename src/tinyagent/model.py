@@ -117,7 +117,10 @@ def _parse_arguments(raw: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def _message_to_openai(message: Message) -> dict[str, Any]:
-    data: dict[str, Any] = {"role": message.role, "content": message.content or None}
+    content: str | None = message.content if message.content is not None else ""
+    if message.role == "assistant" and message.tool_calls and not content:
+        content = None
+    data: dict[str, Any] = {"role": message.role, "content": content}
     if message.tool_calls:
         data["tool_calls"] = [
             {
