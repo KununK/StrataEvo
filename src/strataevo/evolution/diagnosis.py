@@ -249,7 +249,7 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
         "steps": case.steps,
         "candidate_present": case.candidate_present,
         "candidate_created": case.candidate_created,
-        "candidate_deleted": case.candidate_deleted,
+        "artifact_delete_attempted": case.artifact_delete_attempted,
         "tool_sequence": case.tool_sequence,
         "notable_shell_commands": notable_commands,
         "error": case.error[:1000],

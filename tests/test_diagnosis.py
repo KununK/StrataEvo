@@ -159,7 +159,7 @@ class DiagnosisTests(unittest.TestCase):
             candidate_path=None,
             candidate_present=False,
             candidate_created=True,
-            candidate_deleted=True,
+            artifact_delete_attempted=True,
             tool_sequence=["read_file", "write_file", "run_shell"],
             shell_commands=["rm -f solution.py"],
             error="solution.py was not created",
@@ -168,7 +168,7 @@ class DiagnosisTests(unittest.TestCase):
             signals=[
                 "missing_candidate",
                 "artifact_missing",
-                "artifact_deleted",
+                "artifact_delete_attempted",
                 "artifact_created_then_missing",
                 "completed_without_artifact",
             ],

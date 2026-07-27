@@ -3,7 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from strataevo.evolution.evidence import HumanEvalEvidenceCollector
+from strataevo.evolution.evidence import (
+    EvidenceBundle,
+    HumanEvalEvidenceCollector,
+    TaskEvidence,
+)
 
 
 class EvidenceCollectorTests(unittest.TestCase):
@@ -21,13 +25,13 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertTrue(passed.candidate_present)
             self.assertIn("max_steps", passed.signals)
             self.assertTrue(missing.candidate_created)
-            self.assertTrue(missing.candidate_deleted)
+            self.assertTrue(missing.artifact_delete_attempted)
             self.assertEqual(
                 missing.signals,
                 [
                     "missing_candidate",
                     "artifact_missing",
-                    "artifact_deleted",
+                    "artifact_delete_attempted",
                     "artifact_created_then_missing",
                     "completed_without_artifact",
                 ],
@@ -35,6 +39,48 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertEqual(bundle.signal_counts["artifact_created_then_missing"], 1)
             evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))
             self.assertEqual(evidence["cases"][1]["task_id"], "HumanEval/2")
+            self.assertNotIn("candidate_deleted", evidence["cases"][1])
+
+    def test_legacy_deleted_field_is_loaded_as_an_attempt(self):
+        data = {
+            "task_id": "HumanEval/0",
+            "entry_point": "answer",
+            "status": "missing_candidate",
+            "passed": False,
+            "stop_reason": "completed",
+            "steps": 1,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "generation_seconds": 0.1,
+            "test_seconds": 0.0,
+            "candidate_path": None,
+            "candidate_present": False,
+            "candidate_created": True,
+            "candidate_deleted": True,
+            "tool_sequence": ["run_shell"],
+            "shell_commands": ["rm solution.py"],
+            "error": "",
+            "generation_path": "generations.jsonl",
+            "session_path": None,
+            "signals": ["artifact_deleted"],
+        }
+
+        case = TaskEvidence.from_dict(data)
+
+        self.assertTrue(case.artifact_delete_attempted)
+        self.assertIn("artifact_delete_attempted", case.signals)
+        self.assertNotIn("artifact_deleted", case.signals)
+
+        bundle = EvidenceBundle.from_dict(
+            {
+                "evaluator": "humaneval",
+                "source_dir": "evaluation",
+                "summary": {},
+                "signal_counts": {"artifact_deleted": 1},
+                "cases": [data],
+            }
+        )
+        self.assertEqual(bundle.signal_counts, {"artifact_delete_attempted": 1})
 
     def test_rejects_results_without_matching_generation(self):
         with tempfile.TemporaryDirectory() as directory:

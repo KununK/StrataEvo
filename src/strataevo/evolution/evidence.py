@@ -28,7 +28,7 @@ class TaskEvidence:
     candidate_path: str | None
     candidate_present: bool
     candidate_created: bool
-    candidate_deleted: bool
+    artifact_delete_attempted: bool
     tool_sequence: list[str]
     shell_commands: list[str]
     error: str
@@ -41,7 +41,16 @@ class TaskEvidence:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskEvidence:
-        return cls(**data)
+        values = dict(data)
+        if "artifact_delete_attempted" not in values:
+            values["artifact_delete_attempted"] = bool(
+                values.pop("candidate_deleted", False)
+            )
+        values["signals"] = [
+            "artifact_delete_attempted" if item == "artifact_deleted" else item
+            for item in values.get("signals", [])
+        ]
+        return cls(**values)
 
 
 @dataclass(slots=True)
@@ -67,6 +76,13 @@ class EvidenceBundle:
     def from_dict(cls, data: dict[str, Any]) -> EvidenceBundle:
         values = dict(data)
         values["cases"] = [TaskEvidence.from_dict(item) for item in values.get("cases", [])]
+        signal_counts = dict(values.get("signal_counts", {}))
+        legacy_count = int(signal_counts.pop("artifact_deleted", 0))
+        if legacy_count:
+            signal_counts["artifact_delete_attempted"] = (
+                int(signal_counts.get("artifact_delete_attempted", 0)) + legacy_count
+            )
+        values["signal_counts"] = dict(sorted(signal_counts.items()))
         return cls(**values)
 
 
@@ -127,7 +143,7 @@ class HumanEvalEvidenceCollector:
         candidate_file = root / "candidates" / f"{safe_name}.py"
         session_file = root / "sessions" / f"{safe_name}.json"
         messages = generation.get("messages") or []
-        tool_sequence, shell_commands, created, deleted = self._tool_evidence(messages)
+        tool_sequence, shell_commands, created, delete_attempted = self._tool_evidence(messages)
         candidate_present = candidate_file.is_file()
         status = str(result.get("status", "unknown"))
         stop_reason = str(generation.get("stop_reason", result.get("agent_stop_reason", "")))
@@ -136,7 +152,7 @@ class HumanEvalEvidenceCollector:
             stop_reason=stop_reason,
             candidate_present=candidate_present,
             candidate_created=created,
-            candidate_deleted=deleted,
+            artifact_delete_attempted=delete_attempted,
             agent_error=str(generation.get("agent_error", "")),
         )
         error = str(generation.get("agent_error") or result.get("stderr") or "")
@@ -154,7 +170,7 @@ class HumanEvalEvidenceCollector:
             candidate_path=str(candidate_file) if candidate_present else None,
             candidate_present=candidate_present,
             candidate_created=created,
-            candidate_deleted=deleted,
+            artifact_delete_attempted=delete_attempted,
             tool_sequence=tool_sequence,
             shell_commands=shell_commands,
             error=error,
@@ -169,7 +185,7 @@ class HumanEvalEvidenceCollector:
         sequence: list[str] = []
         shell_commands: list[str] = []
         created = False
-        deleted = False
+        delete_attempted = False
         for message in messages:
             for call in message.get("tool_calls") or []:
                 name = str(call.get("name", ""))
@@ -179,13 +195,13 @@ class HumanEvalEvidenceCollector:
                 if name == "write_file" and _is_artifact(path, self.artifact_name):
                     created = True
                 if name == "delete_file" and _is_artifact(path, self.artifact_name):
-                    deleted = True
+                    delete_attempted = True
                 if name == "run_shell":
                     command = str(arguments.get("command", ""))
                     shell_commands.append(command)
-                    if _shell_deletes(command, self.artifact_name):
-                        deleted = True
-        return sequence, shell_commands, created, deleted
+                    if _shell_attempts_delete(command, self.artifact_name):
+                        delete_attempted = True
+        return sequence, shell_commands, created, delete_attempted
 
 
 def _signals(
@@ -194,7 +210,7 @@ def _signals(
     stop_reason: str,
     candidate_present: bool,
     candidate_created: bool,
-    candidate_deleted: bool,
+    artifact_delete_attempted: bool,
     agent_error: str,
 ) -> list[str]:
     signals: list[str] = []
@@ -204,8 +220,8 @@ def _signals(
         signals.append("max_steps")
     if not candidate_present:
         signals.append("artifact_missing")
-    if candidate_deleted:
-        signals.append("artifact_deleted")
+    if artifact_delete_attempted:
+        signals.append("artifact_delete_attempted")
     if candidate_created and not candidate_present:
         signals.append("artifact_created_then_missing")
     if stop_reason == "completed" and not candidate_present:
@@ -215,7 +231,7 @@ def _signals(
     return signals
 
 
-def _shell_deletes(command: str, artifact_name: str) -> bool:
+def _shell_attempts_delete(command: str, artifact_name: str) -> bool:
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
         lexer.whitespace_split = True
