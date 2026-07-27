@@ -7,6 +7,7 @@ from strataevo.evolution.evidence import (
     CodingAgentEvidenceCollector,
     EvidenceBundle,
     TaskEvidence,
+    ToolEvent,
 )
 
 
@@ -24,17 +25,29 @@ class EvidenceCollectorTests(unittest.TestCase):
             passed, missing = bundle.cases
             self.assertTrue(passed.candidate_present)
             self.assertIn("max_steps", passed.signals)
-            self.assertTrue(missing.candidate_created)
             self.assertEqual(
                 missing.signals,
                 [
                     "missing_candidate",
                     "artifact_missing",
-                    "artifact_created_then_missing",
                     "completed_without_artifact",
                 ],
             )
-            self.assertEqual(bundle.signal_counts["artifact_created_then_missing"], 1)
+            self.assertEqual(
+                missing.tool_events,
+                [
+                    ToolEvent(
+                        "write_file",
+                        {"path": "solution.py", "content": "pass\n"},
+                        "Wrote 5 bytes to solution.py",
+                    ),
+                    ToolEvent(
+                        "run_shell",
+                        {"command": "rm -f solution.py"},
+                        "exit_code=0\n",
+                    ),
+                ],
+            )
             evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))
             self.assertEqual(evidence["cases"][1]["task_id"], "HumanEval/2")
             self.assertNotIn("candidate_deleted", evidence["cases"][1])
@@ -60,20 +73,28 @@ class EvidenceCollectorTests(unittest.TestCase):
             "error": "",
             "generation_path": "generations.jsonl",
             "session_path": None,
-            "signals": ["artifact_deleted"],
+            "signals": ["artifact_created_then_missing", "artifact_deleted"],
         }
 
         case = TaskEvidence.from_dict(data)
 
         self.assertFalse(hasattr(case, "artifact_delete_attempted"))
         self.assertNotIn("artifact_deleted", case.signals)
+        self.assertNotIn("artifact_created_then_missing", case.signals)
+        self.assertEqual(
+            case.tool_events,
+            [ToolEvent("run_shell", {"command": "rm solution.py"})],
+        )
 
         bundle = EvidenceBundle.from_dict(
             {
                 "evaluator": "humaneval",
                 "source_dir": "evaluation",
                 "summary": {},
-                "signal_counts": {"artifact_deleted": 1},
+                "signal_counts": {
+                    "artifact_created_then_missing": 1,
+                    "artifact_deleted": 1,
+                },
                 "cases": [data],
             }
         )
@@ -147,14 +168,26 @@ class EvidenceCollectorTests(unittest.TestCase):
                         "tool_calls": [
                             {
                                 "name": "write_file",
+                                "id": "write",
                                 "arguments": {"path": "solution.py", "content": "pass\n"},
                             },
                             {
                                 "name": "run_shell",
+                                "id": "remove",
                                 "arguments": {"command": "rm -f solution.py"},
                             },
                         ],
-                    }
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "write",
+                        "content": "Wrote 5 bytes to solution.py",
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "remove",
+                        "content": "exit_code=0\n",
+                    },
                 ],
             },
         ]

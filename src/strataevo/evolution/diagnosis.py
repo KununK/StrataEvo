@@ -12,7 +12,7 @@ from typing import Any
 from tinyagent import Message, Model, OpenAICompatibleModel
 
 from .contract import EvaluationContract
-from .evidence import EvidenceBundle, TaskEvidence
+from .evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
 from .structured import request_json
@@ -225,7 +225,7 @@ def _select_cases(cases: list[TaskEvidence], limit: int) -> list[TaskEvidence]:
     def priority(case: TaskEvidence) -> tuple[int, int, int, str]:
         return (
             0 if not case.passed else 1,
-            0 if "artifact_created_then_missing" in case.signals else 1,
+            0 if "artifact_missing" in case.signals else 1,
             0 if "max_steps" in case.signals else 1,
             case.task_id,
         )
@@ -248,15 +248,29 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
         "stop_reason": case.stop_reason,
         "steps": case.steps,
         "candidate_present": case.candidate_present,
-        "candidate_created": case.candidate_created,
-        "tool_sequence": case.tool_sequence,
-        "shell_commands": case.shell_commands,
+        "tool_events": [_compact_tool_event(event) for event in case.tool_events[-20:]],
         "error": case.error[:1000],
         "signals": case.signals,
         "candidate_path": case.candidate_path,
         "candidate_source": _candidate_excerpt(case),
         "session_path": case.session_path,
     }
+
+
+def _compact_tool_event(event: ToolEvent) -> dict[str, Any]:
+    return {
+        "name": event.name,
+        "arguments": {
+            key: _compact_value(value) for key, value in event.arguments.items()
+        },
+        "result": _compact_value(event.result),
+    }
+
+
+def _compact_value(value: Any, limit: int = 1000) -> Any:
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[:limit] + "...[truncated]"
 
 
 def _candidate_excerpt(case: TaskEvidence) -> str:

@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
-from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence
+from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from strataevo.evolution.memory import EvolutionMemoryEntry, MemoryDiagnosis
 from strataevo.evolution.structured import StructuredOutputError
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
@@ -77,6 +77,8 @@ class DiagnosisTests(unittest.TestCase):
         request = model.requests[0][1].content
         self.assertIn("HumanEval/25", request)
         self.assertIn("rm -f solution.py", request)
+        self.assertIn("Wrote 5 bytes to solution.py", request)
+        self.assertIn("exit_code=0", request)
         self.assertIn('"prior_evolution"', request)
         self.assertIn("task score did not improve", request)
         self.assertIn('"passed": false', request)
@@ -254,17 +256,22 @@ class DiagnosisTests(unittest.TestCase):
             test_seconds=0.0,
             candidate_path=None,
             candidate_present=False,
-            candidate_created=True,
-            tool_sequence=["read_file", "write_file", "run_shell"],
-            shell_commands=["rm -f solution.py"],
             error="solution.py was not created",
             generation_path="generations.jsonl",
             session_path="sessions/HumanEval_25.json",
             signals=[
                 "missing_candidate",
                 "artifact_missing",
-                "artifact_created_then_missing",
                 "completed_without_artifact",
+            ],
+            tool_events=[
+                ToolEvent("read_file", {"path": "task.py"}, "task"),
+                ToolEvent(
+                    "write_file",
+                    {"path": "solution.py", "content": "pass\n"},
+                    "Wrote 5 bytes to solution.py",
+                ),
+                ToolEvent("run_shell", {"command": "rm -f solution.py"}, "exit_code=0\n"),
             ],
         )
         return EvidenceBundle(

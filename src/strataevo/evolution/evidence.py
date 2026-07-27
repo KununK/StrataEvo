@@ -5,11 +5,20 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .io import read_json, read_jsonl, write_json
+
+
+@dataclass(slots=True)
+class ToolEvent:
+    """One observed tool call and its returned result."""
+
+    name: str
+    arguments: dict[str, Any]
+    result: str | None = None
 
 
 @dataclass(slots=True)
@@ -28,13 +37,11 @@ class TaskEvidence:
     test_seconds: float
     candidate_path: str | None
     candidate_present: bool
-    candidate_created: bool
-    tool_sequence: list[str]
-    shell_commands: list[str]
     error: str
     generation_path: str
     session_path: str | None
     signals: list[str]
+    tool_events: list[ToolEvent] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -42,12 +49,26 @@ class TaskEvidence:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskEvidence:
         values = dict(data)
+        raw_events = values.pop("tool_events", None)
+        sequence = values.pop("tool_sequence", [])
+        shell_commands = values.pop("shell_commands", [])
+        if raw_events is None:
+            raw_events = _legacy_tool_events(sequence, shell_commands)
+        values["tool_events"] = [
+            event if isinstance(event, ToolEvent) else ToolEvent(**event) for event in raw_events
+        ]
+        values.pop("candidate_created", None)
         values.pop("artifact_delete_attempted", None)
         values.pop("candidate_deleted", None)
         values["signals"] = [
             item
             for item in values.get("signals", [])
-            if item not in {"artifact_deleted", "artifact_delete_attempted"}
+            if item
+            not in {
+                "artifact_created_then_missing",
+                "artifact_deleted",
+                "artifact_delete_attempted",
+            }
         ]
         return cls(**values)
 
@@ -76,6 +97,7 @@ class EvidenceBundle:
         values = dict(data)
         values["cases"] = [TaskEvidence.from_dict(item) for item in values.get("cases", [])]
         signal_counts = dict(values.get("signal_counts", {}))
+        signal_counts.pop("artifact_created_then_missing", None)
         signal_counts.pop("artifact_deleted", None)
         signal_counts.pop("artifact_delete_attempted", None)
         values["signal_counts"] = dict(sorted(signal_counts.items()))
@@ -84,8 +106,6 @@ class EvidenceBundle:
 
 class CodingAgentEvidenceCollector:
     """Join task results, generations, candidates, and sessions."""
-
-    artifact_name = "solution.py"
 
     def __init__(self, evaluator: str) -> None:
         self.evaluator = evaluator
@@ -142,7 +162,7 @@ class CodingAgentEvidenceCollector:
         candidate_file = root / "candidates" / f"{safe_name}.py"
         session_file = root / "sessions" / f"{safe_name}.json"
         messages = generation.get("messages") or []
-        tool_sequence, shell_commands, created = self._tool_evidence(messages)
+        tool_events = _tool_events(messages)
         candidate_present = candidate_file.is_file()
         status = str(result.get("status", "unknown"))
         stop_reason = str(generation.get("stop_reason", result.get("agent_stop_reason", "")))
@@ -150,7 +170,6 @@ class CodingAgentEvidenceCollector:
             status=status,
             stop_reason=stop_reason,
             candidate_present=candidate_present,
-            candidate_created=created,
             agent_error=str(generation.get("agent_error", "")),
         )
         error = str(generation.get("agent_error") or result.get("stderr") or "")
@@ -167,30 +186,12 @@ class CodingAgentEvidenceCollector:
             test_seconds=float(result.get("test_seconds", 0.0)),
             candidate_path=str(candidate_file) if candidate_present else None,
             candidate_present=candidate_present,
-            candidate_created=created,
-            tool_sequence=tool_sequence,
-            shell_commands=shell_commands,
             error=error,
             generation_path=str(root / "generations.jsonl"),
             session_path=str(session_file) if session_file.is_file() else None,
             signals=signals,
+            tool_events=tool_events,
         )
-
-    def _tool_evidence(self, messages: list[dict[str, Any]]) -> tuple[list[str], list[str], bool]:
-        sequence: list[str] = []
-        shell_commands: list[str] = []
-        created = False
-        for message in messages:
-            for call in message.get("tool_calls") or []:
-                name = str(call.get("name", ""))
-                arguments = call.get("arguments") or {}
-                sequence.append(name)
-                path = str(arguments.get("path", ""))
-                if name == "write_file" and _is_artifact(path, self.artifact_name):
-                    created = True
-                if name == "run_shell":
-                    shell_commands.append(str(arguments.get("command", "")))
-        return sequence, shell_commands, created
 
 
 def _signals(
@@ -198,7 +199,6 @@ def _signals(
     status: str,
     stop_reason: str,
     candidate_present: bool,
-    candidate_created: bool,
     agent_error: str,
 ) -> list[str]:
     signals: list[str] = []
@@ -208,8 +208,6 @@ def _signals(
         signals.append("max_steps")
     if not candidate_present:
         signals.append("artifact_missing")
-    if candidate_created and not candidate_present:
-        signals.append("artifact_created_then_missing")
     if stop_reason == "completed" and not candidate_present:
         signals.append("completed_without_artifact")
     if agent_error:
@@ -217,8 +215,38 @@ def _signals(
     return signals
 
 
-def _is_artifact(path: str, artifact_name: str) -> bool:
-    return bool(path) and Path(path).name == artifact_name
+def _tool_events(messages: list[dict[str, Any]]) -> list[ToolEvent]:
+    events: list[ToolEvent] = []
+    by_id: dict[str, ToolEvent] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            arguments = call.get("arguments")
+            event = ToolEvent(
+                name=str(call.get("name", "")),
+                arguments=dict(arguments) if isinstance(arguments, dict) else {},
+            )
+            events.append(event)
+            call_id = str(call.get("id", ""))
+            if call_id:
+                by_id[call_id] = event
+        if message.get("role") == "tool":
+            event = by_id.get(str(message.get("tool_call_id", "")))
+            if event is not None:
+                content = message.get("content")
+                event.result = "" if content is None else str(content)
+    return events
+
+
+def _legacy_tool_events(sequence: list[str], shell_commands: list[str]) -> list[dict[str, Any]]:
+    commands = iter(shell_commands)
+    return [
+        {
+            "name": str(name),
+            "arguments": {"command": next(commands, "")} if name == "run_shell" else {},
+            "result": None,
+        }
+        for name in sequence
+    ]
 
 
 def _index_rows(rows: list[dict[str, Any]], label: str) -> dict[str, dict[str, Any]]:
