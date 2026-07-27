@@ -50,6 +50,7 @@ class CandidateEvaluationSession:
         self.validation_commands = validation_commands
         self.max_evaluations = max_evaluations
         self.attempts: list[EvaluationAttempt] = []
+        self._working_tree_state = "parent"
 
     @property
     def evaluations_used(self) -> int:
@@ -64,6 +65,8 @@ class CandidateEvaluationSession:
                     "reason": f"all {self.max_evaluations} benchmark evaluations have been used",
                     "evaluations_used": self.evaluations_used,
                     "evaluations_remaining": 0,
+                    "candidate_retained": None,
+                    "working_tree_state": self._working_tree_state,
                 },
                 ensure_ascii=False,
             )
@@ -83,15 +86,33 @@ class CandidateEvaluationSession:
                 None,
                 None,
             )
-            return self._finish_attempt(attempt)
+            return self._finish_attempt(
+                attempt,
+                candidate_retained=False,
+                working_tree_state=self._working_tree_state,
+            )
 
+        self._working_tree_state = "current_candidate"
         self.git.stage()
         patch = self.git.staged_diff()
         duplicate = self._find_patch(patch)
         if duplicate is not None:
-            if duplicate is not self._best_improving_attempt():
-                self._restore(self._best_improving_attempt())
-            return self._feedback(duplicate, cached=True)
+            best = self._best_improving_attempt()
+            if duplicate is best:
+                self._working_tree_state = "best_candidate"
+                return self._feedback(
+                    duplicate,
+                    cached=True,
+                    candidate_retained=True,
+                    working_tree_state="best_candidate",
+                )
+            self._restore(best)
+            return self._feedback(
+                duplicate,
+                cached=True,
+                candidate_retained=False,
+                working_tree_state=self._working_tree_state,
+            )
 
         number = len(self.attempts) + 1
         attempt_dir = self.generation_dir / f"attempt-{number:04d}"
@@ -111,9 +132,12 @@ class CandidateEvaluationSession:
                 None,
                 impact.to_dict(),
             )
-            feedback = self._finish_attempt(attempt)
             self._restore(self._best_improving_attempt())
-            return feedback
+            return self._finish_attempt(
+                attempt,
+                candidate_retained=False,
+                working_tree_state=self._working_tree_state,
+            )
 
         print(
             f"[evolution] candidate check {number}: validating",
@@ -137,7 +161,11 @@ class CandidateEvaluationSession:
                 None,
                 impact.to_dict(),
             )
-            return self._finish_attempt(attempt)
+            return self._finish_attempt(
+                attempt,
+                candidate_retained=True,
+                working_tree_state="current_candidate",
+            )
 
         benchmark_number = self.evaluations_used + 1
         print(
@@ -157,7 +185,11 @@ class CandidateEvaluationSession:
                 None,
                 impact.to_dict(),
             )
-            return self._finish_attempt(attempt)
+            return self._finish_attempt(
+                attempt,
+                candidate_retained=True,
+                working_tree_state="current_candidate",
+            )
         previous_best = self._best_attempt()
         best_score = max(
             self.parent_report.task_score,
@@ -182,10 +214,18 @@ class CandidateEvaluationSession:
             report.to_dict(),
             impact.to_dict(),
         )
-        feedback = self._finish_attempt(attempt)
         if regressed:
             self._restore(restore_attempt)
-        return feedback
+            return self._finish_attempt(
+                attempt,
+                candidate_retained=False,
+                working_tree_state=self._working_tree_state,
+            )
+        return self._finish_attempt(
+            attempt,
+            candidate_retained=True,
+            working_tree_state="current_candidate",
+        )
 
     def ensure_evaluated(self) -> None:
         """Evaluate once when the mutator edited code but never requested feedback."""
@@ -235,16 +275,34 @@ class CandidateEvaluationSession:
     def to_dicts(self) -> list[dict]:
         return [attempt.to_dict() for attempt in self.attempts]
 
-    def _finish_attempt(self, attempt: EvaluationAttempt) -> str:
+    def _finish_attempt(
+        self,
+        attempt: EvaluationAttempt,
+        *,
+        candidate_retained: bool,
+        working_tree_state: str,
+    ) -> str:
         self.attempts.append(attempt)
         attempt_path = self.generation_dir / f"attempt-{attempt.number:04d}" / "attempt.json"
         attempt_path.write_text(
             json.dumps(attempt.to_dict(), indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        return self._feedback(attempt)
+        self._working_tree_state = working_tree_state
+        return self._feedback(
+            attempt,
+            candidate_retained=candidate_retained,
+            working_tree_state=working_tree_state,
+        )
 
-    def _feedback(self, attempt: EvaluationAttempt, *, cached: bool = False) -> str:
+    def _feedback(
+        self,
+        attempt: EvaluationAttempt,
+        *,
+        cached: bool = False,
+        candidate_retained: bool,
+        working_tree_state: str,
+    ) -> str:
         report = attempt.report
         feedback = {
             "attempt": attempt.number,
@@ -259,25 +317,48 @@ class CandidateEvaluationSession:
             "evidence_path": report["metrics"].get("evidence_path") if report else None,
             "signal_counts": report["metrics"].get("evidence_signal_counts") if report else None,
             "change_impact": attempt.change_impact,
+            "candidate_retained": candidate_retained,
+            "working_tree_state": working_tree_state,
         }
+        if attempt.outcome_type == "no_change":
+            tree_instruction = (
+                f"No submitted patch is active; the working tree contains "
+                f"the {working_tree_state.replace('_', ' ')}."
+            )
+        elif candidate_retained:
+            tree_instruction = "The submitted patch remains in the working tree."
+        else:
+            tree_instruction = (
+                f"The submitted patch is not active; the working tree now contains "
+                f"the {working_tree_state.replace('_', ' ')}."
+            )
         if attempt.outcome_type in {
             "deferred_change",
             "mixed_change_scope",
             "unclassified_change",
         }:
-            feedback["instruction"] = (
+            next_action = (
                 "This patch cannot be attributed to the active benchmark. Make one focused change "
                 "only under its direct_paths, or stop."
             )
+        elif attempt.outcome_type == "validation_failed":
+            next_action = (
+                "Correct the reported validation errors before requesting another check. "
+                "Use read_file as the source of truth; diagnostic gutters are annotations, "
+                "not source characters."
+            )
+        elif attempt.outcome_type == "evaluation_failed":
+            next_action = "Inspect the evaluation error and correct the retained candidate."
         elif report and float(report["task_score"]) >= 1.0:
-            feedback["instruction"] = "Maximum task score reached; stop editing."
+            next_action = "Maximum task score reached; stop editing."
         elif self.evaluations_used >= self.max_evaluations:
-            feedback["instruction"] = "Evaluation budget exhausted; stop editing."
+            next_action = "Evaluation budget exhausted; stop editing."
         else:
-            feedback["instruction"] = (
+            next_action = (
                 "Inspect the evidence, then refine the candidate or stop if no useful "
                 "correction remains."
             )
+        feedback["instruction"] = f"{tree_instruction} {next_action}"
         return json.dumps(feedback, indent=2, ensure_ascii=False)
 
     def _find_patch(self, patch: str) -> EvaluationAttempt | None:
@@ -305,6 +386,9 @@ class CandidateEvaluationSession:
             self.git.rollback()
         if attempt and attempt.patch_path:
             self.git.apply_patch(Path(attempt.patch_path))
+            self._working_tree_state = "best_candidate"
+        else:
+            self._working_tree_state = "parent"
 
 
 def _last_output(output: str, limit: int = 4000) -> str:

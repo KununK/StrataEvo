@@ -196,6 +196,16 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(feedback["outcome_type"], "validation_failed")
             self.assertEqual(feedback["evaluations_used"], 0)
             self.assertEqual(feedback["evaluations_remaining"], 1)
+            self.assertTrue(feedback["candidate_retained"])
+            self.assertEqual(feedback["working_tree_state"], "current_candidate")
+
+            duplicate = json.loads(session.evaluate())
+
+            self.assertTrue(duplicate["cached"])
+            self.assertFalse(duplicate["candidate_retained"])
+            self.assertEqual(duplicate["working_tree_state"], "parent")
+            self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 0\n")
+            self.assertIn("submitted patch is not active", duplicate["instruction"])
 
             agent_file.write_text("VERSION = 1\n", encoding="utf-8")
             with patch(
@@ -251,6 +261,8 @@ class EvolutionTests(unittest.TestCase):
             feedback = json.loads(session.evaluate())
 
             self.assertIn("restored best candidate", feedback["reason"])
+            self.assertFalse(feedback["candidate_retained"])
+            self.assertEqual(feedback["working_tree_state"], "best_candidate")
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
             self.assertEqual(session.evaluations_used, 2)
 

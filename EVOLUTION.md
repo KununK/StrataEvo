@@ -140,6 +140,10 @@ round。每轮 step 上限根据剩余总预算和剩余 round 数动态均分�
 时初始上限为每轮 40；如果某轮提前结束，未使用的预算会滚入后续轮次。每轮结束后控制器
 自动检查当前 diff，并把验证或 benchmark 结果追加到同一个 session 后再启动下一轮；模型
 主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
+每条候选反馈都会返回 `candidate_retained` 和 `working_tree_state`。前者说明刚提交的 patch
+是否仍然生效，后者明确当前工作树是 `current_candidate`、`best_candidate` 还是 `parent`。
+如果候选因重复失败、范围越界或分数退化而被恢复，下一轮必须以该状态为准，不能把父代随后
+通过固定检查误认为已回滚候选通过了检查。
 
 每次 attempt 的 patch、固定验证日志、评测目录和结果保存在：
 

@@ -164,7 +164,9 @@ def _run_refinement_session(
 Continue from the current working tree. Fix validation errors before changing direction. If the
 candidate was benchmarked, inspect its evidence before deciding the next edit. Make a coherent
 revision that responds to this feedback. If no further justified improvement remains, do not edit
-and answer exactly FINALIZE."""
+and answer exactly FINALIZE. Treat working_tree_state as authoritative: when candidate_retained is
+false, the submitted patch has been discarded and its validation result does not describe the
+currently active code."""
     else:
         stop_reason = "round_limit"
 

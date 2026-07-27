@@ -46,6 +46,8 @@ class EvaluationContractTests(unittest.TestCase):
             self.assertEqual(feedback["outcome_type"], "deferred_change")
             self.assertEqual(feedback["evaluations_used"], 0)
             self.assertEqual(evaluator.calls, 0)
+            self.assertFalse(feedback["candidate_retained"])
+            self.assertEqual(feedback["working_tree_state"], "parent")
             self.assertEqual(mutator.read_text(encoding="utf-8"), "VERSION = 0\n")
             self.assertEqual(
                 feedback["change_impact"]["deferred_paths"],
@@ -65,6 +67,8 @@ class EvaluationContractTests(unittest.TestCase):
             self.assertEqual(feedback["outcome_type"], "mixed_change_scope")
             self.assertEqual(feedback["evaluations_used"], 0)
             self.assertEqual(evaluator.calls, 0)
+            self.assertFalse(feedback["candidate_retained"])
+            self.assertEqual(feedback["working_tree_state"], "parent")
             self.assertEqual(repository.changed_paths(), [])
 
     def test_selected_candidate_uses_fresh_promotion_comparison(self):
