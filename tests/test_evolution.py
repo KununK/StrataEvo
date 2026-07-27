@@ -107,6 +107,13 @@ class EvolutionTests(unittest.TestCase):
             (root / "src/tinyagent").mkdir(parents=True)
             (root / "tests").mkdir()
             (root / ".gitignore").write_text(".venv/\nevolution/runs/\n", encoding="utf-8")
+            ruff = root / ".venv/bin/ruff"
+            ruff.parent.mkdir(parents=True)
+            ruff.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$*" >> formatter.log\n',
+                encoding="utf-8",
+            )
+            ruff.chmod(0o755)
             self._git(root, "init", "-b", "main")
             workspace = SelfWorkspace(root, ["."], [])
             tools = {item.name: item for item in workspace.tools()}
@@ -132,8 +139,18 @@ class EvolutionTests(unittest.TestCase):
                 {"path": "tests/test_new.py", "content": "def test_new(): pass\n"}
             )
             self.assertTrue((root / "tests/test_new.py").is_file())
+            tools["format_code"].run({"path": "src/tinyagent/new.py"})
+            self.assertEqual(
+                (root / "formatter.log").read_text(encoding="utf-8").splitlines(),
+                [
+                    "check src/tinyagent/new.py --fix",
+                    "format src/tinyagent/new.py",
+                ],
+            )
             with self.assertRaises(PermissionError):
                 tools["write_file"].run({"path": "evolution/runs/result.json", "content": "{}\n"})
+            with self.assertRaises(PermissionError):
+                tools["format_code"].run({"path": "evolution/runs"})
             with self.assertRaises(PermissionError):
                 tools["read_file"].run({"path": ".git/config"})
             with self.assertRaises(PermissionError):

@@ -42,6 +42,7 @@ class SelfWorkspace:
         self.candidate_evaluator = candidate_evaluator
         self.command_timeout = command_timeout
         self.max_output = max_output
+        self.ruff = self.root / ".venv" / "bin" / "ruff"
 
     def tools(self) -> list[Tool]:
         @tool
@@ -167,6 +168,31 @@ class SelfWorkspace:
                     break
             return self._limit("\n\n".join(outputs))
 
+        @tool(requires_approval=True)
+        def format_code(path: str = ".") -> str:
+            """Apply Ruff's safe fixes and formatter to a project file or directory."""
+            target = self._resolve_mutable(path)
+            if not self.ruff.is_file():
+                raise FileNotFoundError(self.ruff)
+            relative = target.relative_to(self.root).as_posix() or "."
+            commands = [
+                [str(self.ruff), "check", relative, "--fix"],
+                [str(self.ruff), "format", relative],
+            ]
+            outputs = []
+            for command in commands:
+                completed = subprocess.run(
+                    command,
+                    cwd=self.root,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.command_timeout,
+                    check=False,
+                )
+                output = completed.stdout + completed.stderr
+                outputs.append(f"$ {' '.join(command)}\nexit_code={completed.returncode}\n{output}")
+            return self._limit("\n\n".join(outputs))
+
         @tool
         def evaluate_candidate() -> str:
             """Evaluate the current self-modification and return benchmark feedback."""
@@ -183,6 +209,7 @@ class SelfWorkspace:
             replace_lines,
             delete_file,
             show_diff,
+            format_code,
             run_validation,
         ]
         if self.candidate_evaluator is not None:

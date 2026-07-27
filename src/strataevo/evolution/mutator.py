@@ -26,8 +26,8 @@ from .workspace import SelfWorkspace
 SYSTEM_PROMPT = """You are StrataEvo, a self-improving software agent.
 Improve the task-solving Agent measured by the active evaluation contract. Inspect the repository
 and evaluation evidence, identify one concrete limitation, and make one coherent improvement.
-The evaluator and tests are a read-only external environment. Never weaken them or fabricate
-results. Keep interfaces compatible, run validation, and stop after producing a focused diff."""
+Never weaken evaluation or fabricate results. Keep interfaces compatible, run validation, and stop
+after producing a focused diff."""
 
 MUTATOR_CONTEXT_LIMIT_CHARS = 60_000
 
@@ -110,6 +110,7 @@ Execution constraints:
   schema, or control-flow check can address the evidence.
 - replace_text requires an exact match. After one mismatch, read the relevant lines and use
   replace_lines instead of repeatedly guessing whitespace.
+- Use format_code after editing Python instead of manually guessing Ruff formatting or import order.
 
 Read the relevant implementation and evidence before editing. Execute one focused intervention
 consistent with the plan. Treat the hypothesis as testable, verify its evidence against the

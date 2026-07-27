@@ -113,6 +113,7 @@ replace_text     精确修改源码
 replace_lines    按 read_file 返回的闭区间行号替换源码
 delete_file      删除可演化文件
 show_diff        查看当前自身修改
+format_code      对指定项目路径运行 Ruff 自动修复和格式化
 run_validation   运行固定检查
 evaluate_candidate  验证并评测当前候选，将结果返回当前自修改会话
 ```
@@ -147,8 +148,9 @@ evolution/runs/<run_name>/generation-NNNN/attempt-NNNN/
 round 反馈，同时避免从多次随机生成中直接选择最高值造成的 best-of-N 晋级偏差。
 
 `replace_text` 只接受恰好出现一次的原文；一次精确匹配失败后，应重新读取相关行并改用
-`replace_lines`，避免反复猜测空格。自修改提示要求在前三分之一预算内开始编辑，并保留
-最后三分之一用于查看 diff、运行固定验证和修复错误。
+`replace_lines`，避免反复猜测空格。Python 修改应使用 `format_code` 处理机械性的格式和
+import 排序错误。该工具只执行固定的 Ruff 命令，不开放任意 Shell。自修改提示要求在前
+三分之一预算内开始编辑，并保留最后三分之一用于查看 diff、运行固定验证和修复错误。
 
 ## 晋级规则
 
