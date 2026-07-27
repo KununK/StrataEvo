@@ -4,6 +4,9 @@ StrataEvo 是一个面向自进化 Agent 和下游任务评测的研究项目。
 
 一个 `pyproject.toml` 管理 Agent、推理、训练和评测所需的统一 Python 环境。
 
+当前可运行实现和实验记录格式见 [`EVOLUTION.md`](EVOLUTION.md)。下一阶段将演化范围扩展到
+整个项目，并为 Model 层加入 TTA，研究路线见 [`ROADMAP.md`](ROADMAP.md)。
+
 ## 项目结构
 
 ```text
