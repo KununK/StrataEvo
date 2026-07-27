@@ -185,6 +185,33 @@ class EvolutionTests(unittest.TestCase):
             self.assertFalse(added.exists())
             repository.ensure_clean()
 
+    def test_git_repository_can_stage_after_a_staged_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.py"
+            second = root / "second.py"
+            first.write_text("FIRST = 1\n", encoding="utf-8")
+            second.write_text("SECOND = 1\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            repository = GitRepository(root, ["."])
+
+            first.unlink()
+            repository.stage()
+            second.write_text("SECOND = 2\n", encoding="utf-8")
+            repository.stage()
+
+            patch = repository.staged_diff()
+            self.assertIn("deleted file mode", patch)
+            self.assertIn("+SECOND = 2", patch)
+            repository.rollback()
+            self.assertTrue(first.is_file())
+            self.assertEqual(second.read_text(encoding="utf-8"), "SECOND = 1\n")
+            repository.ensure_clean()
+
     def test_git_repository_never_collects_runtime_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

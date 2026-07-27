@@ -41,9 +41,9 @@ class GitRepository:
         return sorted(set([*self._tracked_paths(), *self._untracked_paths()]))
 
     def stage(self) -> None:
-        paths = self.changed_paths()
+        paths = sorted(set([*self._worktree_paths(), *self._untracked_paths()]))
         if paths:
-            self._run(["add", "-A", "--", *paths])
+            self._run(["add", "-A", "--", *paths], capture=True)
 
     def staged_diff(self) -> str:
         return self._run(["diff", "--cached", "--binary", "--", *self._pathspecs()], capture=True)
@@ -73,13 +73,15 @@ class GitRepository:
                 remove_path(target)
 
     def _tracked_paths(self) -> list[str]:
-        tracked = self._run(
-            ["diff", "--name-only", "--", *self._pathspecs()], capture=True
-        ).splitlines()
         staged = self._run(
             ["diff", "--cached", "--name-only", "--", *self._pathspecs()], capture=True
         ).splitlines()
-        return sorted(set(filter(None, [*tracked, *staged])))
+        return sorted(set(filter(None, [*self._worktree_paths(), *staged])))
+
+    def _worktree_paths(self) -> list[str]:
+        return self._run(
+            ["diff", "--name-only", "--", *self._pathspecs()], capture=True
+        ).splitlines()
 
     def _untracked_paths(self) -> list[str]:
         return self._run(
