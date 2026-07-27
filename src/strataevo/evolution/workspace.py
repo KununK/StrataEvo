@@ -1,4 +1,4 @@
-"""Tools that let an agent inspect its repository and edit only its own implementation."""
+"""Tools for inspecting and modifying the evolvable project."""
 
 from __future__ import annotations
 
@@ -8,6 +8,21 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tinyagent import Tool, tool
+
+HIDDEN_ROOTS = {".git", ".venv", ".tinyagent", ".pytest_cache", ".ruff_cache", "__pycache__"}
+PROTECTED_WRITE_ROOTS = {
+    ".git",
+    ".venv",
+    ".tinyagent",
+    ".pytest_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "eval/logs",
+    "eval/outputs",
+    "evolution/runs",
+}
+SECRET_SUFFIXES = {".key", ".pem"}
 
 
 class SelfWorkspace:
@@ -38,7 +53,7 @@ class SelfWorkspace:
             items = [
                 str(item.relative_to(self.root))
                 for item in sorted(target.iterdir())
-                if item.name not in {".git", ".venv", "__pycache__"}
+                if item.name not in HIDDEN_ROOTS
             ]
             return self._limit("\n".join(items))
 
@@ -55,15 +70,13 @@ class SelfWorkspace:
             return self._limit(output)
 
         @tool
-        def search_files(query: str, path: str = "src") -> str:
+        def search_files(query: str, path: str = ".") -> str:
             """Search repository text files for a literal string."""
             target = self._resolve(path)
             paths = [target] if target.is_file() else target.rglob("*")
             matches: list[str] = []
             for candidate in paths:
-                if not candidate.is_file() or any(
-                    part in {".git", ".venv", "__pycache__"} for part in candidate.parts
-                ):
+                if not candidate.is_file() or any(part in HIDDEN_ROOTS for part in candidate.parts):
                     continue
                 try:
                     for number, line in enumerate(
@@ -79,7 +92,7 @@ class SelfWorkspace:
 
         @tool(requires_approval=True)
         def write_file(path: str, content: str) -> str:
-            """Create or replace a source file in the evolvable implementation."""
+            """Create or replace a file in the evolvable project."""
             target = self._resolve_mutable(path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
@@ -115,7 +128,7 @@ class SelfWorkspace:
 
         @tool(requires_approval=True)
         def delete_file(path: str) -> str:
-            """Delete one file from the evolvable implementation."""
+            """Delete one file from the evolvable project."""
             target = self._resolve_mutable(path)
             if not target.is_file():
                 raise ValueError(f"not a file: {path}")
@@ -182,12 +195,33 @@ class SelfWorkspace:
         target = (self.root / path).resolve()
         if not target.is_relative_to(self.root):
             raise PermissionError(f"path escapes repository: {path}")
+        relative = target.relative_to(self.root)
+        if relative.parts and relative.parts[0] in {".git", ".venv"}:
+            raise PermissionError(f"path is protected runtime state: {path}")
+        if any(part == ".env" or part.startswith(".env.") for part in relative.parts):
+            raise PermissionError(f"path may contain credentials: {path}")
+        if target.suffix.lower() in SECRET_SUFFIXES:
+            raise PermissionError(f"path may contain credentials: {path}")
         return target
 
     def _resolve_mutable(self, path: str) -> Path:
         target = self._resolve(path)
         if not any(target.is_relative_to(root) for root in self.mutable_roots):
-            raise PermissionError(f"path is outside evolvable source: {path}")
+            raise PermissionError(f"path is outside evolvable project: {path}")
+        relative = target.relative_to(self.root).as_posix()
+        if any(
+            relative == root or relative.startswith(root + "/") for root in PROTECTED_WRITE_ROOTS
+        ):
+            raise PermissionError(f"path is protected runtime state: {path}")
+        ignored = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", relative],
+            cwd=self.root,
+            check=False,
+        )
+        if ignored.returncode == 0:
+            raise PermissionError(f"path is ignored runtime state: {path}")
+        if ignored.returncode not in {0, 1}:
+            raise RuntimeError(f"git check-ignore failed for {path}")
         return target
 
     def _relative_mutable_paths(self) -> list[str]:

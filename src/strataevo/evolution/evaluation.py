@@ -26,8 +26,6 @@ class BenchmarkSpec:
     display_name: str
     module: str
     objective: str
-    direct_paths: tuple[str, ...] = ("src/tinyagent",)
-    deferred_paths: tuple[str, ...] = ("src/strataevo/evolution/mutator.py",)
     arguments: tuple[str, ...] = ()
 
 
@@ -37,7 +35,7 @@ def validation_commands(repo: Path) -> list[list[str]]:
     if not Path(python).is_file() or not Path(ruff).is_file():
         raise FileNotFoundError("expected .venv/bin/python and .venv/bin/ruff")
     return [
-        [ruff, "check", "src", "tests", "eval"],
+        [ruff, "check", "."],
         [python, "-m", "pytest", "-q"],
         [python, "-m", "strataevo.evolution.cli", "--help"],
     ]
@@ -83,8 +81,6 @@ class BenchmarkEvaluator:
         self.contract = EvaluationContract(
             benchmark=spec.display_name,
             objective=spec.objective,
-            direct_paths=spec.direct_paths,
-            deferred_paths=spec.deferred_paths,
         )
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:

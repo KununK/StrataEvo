@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-DEFAULT_MUTABLE_PATHS = ["src/tinyagent", "src/strataevo/evolution/mutator.py"]
+DEFAULT_MUTABLE_PATHS = ["."]
 
 
 @dataclass(slots=True)

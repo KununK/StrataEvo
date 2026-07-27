@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -231,10 +232,6 @@ regressing task quality. A rejected prior attempt does not prove the whole direc
 but repeating the same intervention requires new evidence or a materially different mechanism.
 Treat prior outcome_type=no_change or validation_failed as an execution failure, not benchmark
 evidence against its hypothesis. Use those records to choose a more executable intervention.
-Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluation-contract
-mismatch: the intervention was not tested by the benchmark and must not be interpreted as a
-negative task result.
-
 The promotion_policy is authoritative. While parent_task_score is below 1.0, select a diagnosis
 whose intervention can plausibly fix an actually failed task and include task_score with direction
 increase in expected_outcomes. Signals such as max_steps or average_agent_steps from passed tasks
@@ -248,10 +245,9 @@ now using only names from available_metrics. Every likely_files entry must be an
 repository.existing_mutable_files or a plausible new file below repository.mutable_paths. These
 paths guide the mutation but do not narrow its configured write permissions.
 
-The evaluation_contract is authoritative when present. Its direct_paths are loaded by the active
-benchmark and can be evaluated now. Its deferred_paths affect later evolution but are not loaded by
-the active benchmark. Plan only a change under direct_paths. Never claim that a deferred change is
-validated by an immediate benchmark score.
+The repository is open for project-wide evolution. The evaluation_contract states the active task
+objective but does not limit writable files. Prefer a focused, causally testable intervention even
+though any version-controlled project file may be changed.
 
 Return exactly this JSON object:
 {
@@ -298,12 +294,7 @@ def plan_evolution(
     destination: str | Path,
     evaluation_contract: EvaluationContract | None = None,
 ) -> EvolutionPlanReport:
-    eligible_paths = (
-        list(evaluation_contract.direct_paths)
-        if evaluation_contract is not None
-        else config.mutable_paths
-    )
-    existing_files = mutable_source_files(config.repo, eligible_paths)
+    existing_files = mutable_source_files(config.repo, config.mutable_paths)
     model = OpenAICompatibleModel(
         model=config.model,
         base_url=config.base_url,
@@ -314,7 +305,7 @@ def plan_evolution(
         diagnosis,
         parent_report,
         history,
-        mutable_paths=eligible_paths,
+        mutable_paths=config.mutable_paths,
         existing_files=existing_files,
         evaluation_contract=evaluation_contract,
     )
@@ -338,21 +329,20 @@ def evaluation_metrics(report: dict[str, Any]) -> dict[str, float]:
 
 def mutable_source_files(repo: str | Path, mutable_paths: list[str]) -> list[str]:
     root = Path(repo).resolve()
-    files: list[str] = []
     for relative in mutable_paths:
         target = (root / relative).resolve()
         if not target.is_relative_to(root):
             raise ValueError(f"mutable path escapes repository: {relative}")
-        if target.is_file():
-            candidates = [target]
-        elif target.is_dir():
-            candidates = target.rglob("*")
-        else:
-            candidates = []
-        for candidate in candidates:
-            if candidate.is_file() and "__pycache__" not in candidate.parts:
-                files.append(candidate.relative_to(root).as_posix())
-    return sorted(set(files))
+    completed = subprocess.run(
+        ["git", "ls-files", "--", *mutable_paths],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"git ls-files failed: {completed.stderr.strip()}")
+    return sorted(set(filter(None, completed.stdout.splitlines())))
 
 
 def observe_expected_outcomes(
@@ -418,7 +408,8 @@ def _is_mutable_path(path: str, mutable_paths: list[str]) -> bool:
     candidate = PurePosixPath(path)
     if candidate.is_absolute() or ".." in candidate.parts or "\\" in path:
         return False
-    return any(
-        candidate == root or root in candidate.parents
-        for root in (PurePosixPath(item) for item in mutable_paths)
-    )
+    for item in mutable_paths:
+        root = PurePosixPath(item)
+        if not root.parts or candidate == root or root in candidate.parents:
+            return True
+    return False

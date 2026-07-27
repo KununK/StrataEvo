@@ -13,27 +13,11 @@ from strataevo.evolution.types import EvaluationReport
 CONTRACT = EvaluationContract(
     benchmark="test",
     objective="measure the task agent",
-    direct_paths=("src/tinyagent",),
-    deferred_paths=("src/strataevo/evolution/mutator.py",),
 )
 
 
 class EvaluationContractTests(unittest.TestCase):
-    def test_classifies_direct_deferred_and_unknown_paths(self):
-        impact = CONTRACT.classify(
-            [
-                "src/tinyagent/agent.py",
-                "src/strataevo/evolution/mutator.py",
-                "README.md",
-            ]
-        )
-
-        self.assertEqual(impact.direct_paths, ("src/tinyagent/agent.py",))
-        self.assertEqual(impact.deferred_paths, ("src/strataevo/evolution/mutator.py",))
-        self.assertEqual(impact.unclassified_paths, ("README.md",))
-        self.assertFalse(impact.is_direct_only)
-
-    def test_deferred_change_is_restored_without_running_benchmark(self):
+    def test_project_wide_change_runs_benchmark(self):
         with self._repository() as (root, repository, evaluator):
             mutator = root / "src/strataevo/evolution/mutator.py"
             mutator.write_text("VERSION = 1\n", encoding="utf-8")
@@ -41,33 +25,11 @@ class EvaluationContractTests(unittest.TestCase):
 
             feedback = json.loads(session.evaluate())
 
-            self.assertEqual(feedback["outcome_type"], "deferred_change")
-            self.assertEqual(feedback["evaluations_used"], 0)
-            self.assertEqual(evaluator.calls, 0)
-            self.assertFalse(feedback["candidate_retained"])
-            self.assertEqual(feedback["working_tree_state"], "parent")
-            self.assertEqual(mutator.read_text(encoding="utf-8"), "VERSION = 0\n")
-            self.assertEqual(
-                feedback["change_impact"]["deferred_paths"],
-                ["src/strataevo/evolution/mutator.py"],
-            )
-
-    def test_mixed_change_is_not_attributed_to_direct_benchmark(self):
-        with self._repository() as (root, repository, evaluator):
-            (root / "src/tinyagent/agent.py").write_text("VERSION = 1\n", encoding="utf-8")
-            (root / "src/strataevo/evolution/mutator.py").write_text(
-                "VERSION = 1\n", encoding="utf-8"
-            )
-            session = self._session(root, repository, evaluator)
-
-            feedback = json.loads(session.evaluate())
-
-            self.assertEqual(feedback["outcome_type"], "mixed_change_scope")
-            self.assertEqual(feedback["evaluations_used"], 0)
-            self.assertEqual(evaluator.calls, 0)
-            self.assertFalse(feedback["candidate_retained"])
-            self.assertEqual(feedback["working_tree_state"], "parent")
-            self.assertEqual(repository.changed_paths(), [])
+            self.assertEqual(feedback["outcome_type"], "evaluated")
+            self.assertEqual(feedback["evaluations_used"], 1)
+            self.assertEqual(evaluator.calls, 1)
+            self.assertTrue(feedback["candidate_retained"])
+            self.assertEqual(repository.changed_paths(), ["src/strataevo/evolution/mutator.py"])
 
     def test_selected_candidate_uses_fresh_promotion_comparison(self):
         reports = iter(
@@ -117,6 +79,7 @@ class EvaluationContractTests(unittest.TestCase):
                 (root / "src/strataevo/evolution/mutator.py").write_text(
                     "VERSION = 0\n", encoding="utf-8"
                 )
+                (root / ".gitignore").write_text("attempts/\n", encoding="utf-8")
                 for command in (
                     ["git", "init", "-b", "main"],
                     ["git", "config", "user.name", "test"],
@@ -142,10 +105,7 @@ class EvaluationContractTests(unittest.TestCase):
                             return EvaluationReport(0.6, {}, "candidate", "candidate.log")
                         return next(reports)
 
-                mutable = [
-                    "src/tinyagent",
-                    "src/strataevo/evolution/mutator.py",
-                ]
+                mutable = ["."]
                 return root, GitRepository(root, mutable), FakeEvaluator()
 
             def __exit__(self, *_args):

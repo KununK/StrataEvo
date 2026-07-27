@@ -9,7 +9,7 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
   -> Diagnosis 判断主要演化层
   -> Evolution Plan 选择一项可检验的干预
   -> 自修改执行器修改自身源码
-  -> Evaluation Contract 检查修改能否被当前 benchmark 观察
+  -> Evaluation Contract 提供当前 benchmark 的目标
   -> [固定检查 -> 探索性评测 -> 根据反馈继续修改]，最多 5 次
   -> 恢复探索阶段最佳候选
   -> 重新评测父代和候选，确认提升后提交，否则整体回滚
@@ -22,49 +22,38 @@ StrataEvo 可以评测、改写并版本化自己的 Agent 实现。每一代执
 
 ## 演化边界
 
-当前允许演化的代码是：
+当前开放模式允许修改整个受 Git 管理的 StrataEvo 项目：
 
 ```text
-src/tinyagent/
-src/strataevo/evolution/mutator.py
+src/
+eval/
+tests/
+pyproject.toml、脚本、Prompt、配置和文档
 ```
 
-这包括完整的 Tinyagent 运行时，以及负责决定如何改进 Agent 的自修改策略。
-以下环境保持固定：
+以下运行状态不属于候选：
 
 ```text
-eval/                           评测基准和奖励信号
-tests/                          回归测试
-src/strataevo/evolution/cli.py  晋级控制器
-src/strataevo/evolution/diagnosis.py  四层诊断器
-src/strataevo/evolution/plan.py  单目标演化计划器
-src/strataevo/evolution/evidence.py  评测证据收集器
-src/strataevo/evolution/git.py  Git 提交和回滚
+.git/、.venv/、缓存和密钥
+evolution/runs/
+eval/logs/
+eval/outputs/
 ```
 
-如果不保留这条边界，Agent 就可能通过修改评测器提高报告分数，而不是真正提升自身能力。
+文件工具使用 Git 忽略规则和固定运行目录清单保护这些路径。候选仍然在当前 Git 工作区中
+形成事务：接受后提交，拒绝或中断后回滚。
 
 ## Evaluation Contract
 
-可写不代表可以被当前 benchmark 评价。每个 Evaluator 必须声明一份 Evaluation Contract，
-说明当前目标以及代码修改的生效范围。HumanEval 和 MBPP 当前都声明：
-
-```text
-direct_paths
-  src/tinyagent/
-  benchmark 子进程会加载，能够用本轮 pass@1 评价
-
-deferred_paths
-  src/strataevo/evolution/mutator.py
-  只会改变后续自修改过程，本轮 benchmark 不会加载
-```
-
-候选只有全部修改都位于 `direct_paths` 时才会进入当前 benchmark。仅修改
-`deferred_paths`、混合修改两个范围或者包含未分类路径的候选，都会返回结构化反馈、恢复
-父代或已有最佳候选，并且不消耗探索性 benchmark 配额。`mutator.py` 仍然保留在可演化
-范围，但需要未来独立的 Evolver 评测契约验证，不能用即时 benchmark 波动证明其改进。
+每个 Evaluator 仍声明 benchmark 名称和任务目标，供 Diagnosis、Planner 和运行记录使用。
+Evaluation Contract 不再划分可写目录或拒绝跨目录修改。
 
 每次运行使用的契约保存在 `evolution/runs/<run_name>/evaluation_contract.json`。
+
+第一版会直接运行候选当前版本的 tests 和 benchmark。候选可以修改 evaluator、tests 或
+后处理，所以晋级表示“候选系统在自身当前协议下获得更高分”，不自动证明底层任务能力提高。
+所有 accepted patch、轨迹和评测输出都会保留，供实验后区分真实能力改进、评测修复和评分
+投机。更稳定的外部验收属于后续阶段，不在这一版增加。
 
 ## 启动演化
 
@@ -73,13 +62,13 @@ deferred_paths
 ```bash
 strataevo \
   --run-name humaneval-dev \
-  --branch evo_test_inter \
+  --branch evo_fullstack_tta \
   --benchmark humaneval \
   --generations 1 \
   --eval-limit 5
 ```
 
-该命令要求当前位于或允许切换到 `evo_test_inter` 分支。系统首先评测父代，然后在一次
+该命令要求当前位于或允许切换到 `evo_fullstack_tta` 分支。系统首先评测父代，然后在一次
 自修改会话中根据候选评测结果连续修正实现。
 
 继续同一条演化谱系：
@@ -87,7 +76,7 @@ strataevo \
 ```bash
 strataevo \
   --run-name humaneval-dev \
-  --branch evo_test_inter \
+  --branch evo_fullstack_tta \
   --generations 3 \
   --resume
 ```
@@ -108,8 +97,8 @@ strataevo \
 `--mutator-max-steps` 默认是 `200`，`--mutator-rounds` 和 `--max-eval-attempts` 默认都是
 `5`，`--benchmark-max-steps` 默认是 `12`。四个预算相互独立：它们依次控制整代自修改
 总步数、连续反馈轮数、候选 benchmark 次数，以及每道评测任务中的 Agent 步数。无修改或
-固定验证失败和不符合 Evaluation Contract 的修改会留下 attempt 记录，但不占用探索性
-benchmark 次数。最终父代重测和候选确认是独立的晋级检查，不计入该配额。
+固定验证失败会留下 attempt 记录，但不占用探索性 benchmark 次数。最终父代重测和候选确认
+是独立的晋级检查，不计入该配额。
 
 ## 自修改过程
 
@@ -140,7 +129,7 @@ round。每轮 step 上限根据剩余总预算和剩余 round 数动态均分�
 主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
 每条候选反馈都会返回 `candidate_retained` 和 `working_tree_state`。前者说明刚提交的 patch
 是否仍然生效，后者明确当前工作树是 `current_candidate`、`best_candidate` 还是 `parent`。
-如果候选因重复失败、范围越界或分数退化而被恢复，下一轮必须以该状态为准，不能把父代随后
+如果候选因重复失败或分数退化而被恢复，下一轮必须以该状态为准，不能把父代随后
 通过固定检查误认为已回滚候选通过了检查。
 
 每次 attempt 的 patch、固定验证日志、评测目录和结果保存在：
@@ -168,10 +157,9 @@ round 反馈，同时避免从多次随机生成中直接选择最高值造成�
 
 一个新版本只有同时满足以下条件才会被提交：
 
-1. 修改仅位于当前 Evaluation Contract 的 `direct_paths`；
-2. Ruff、pytest 和自进化 CLI 启动检查全部通过；
-3. 探索阶段选出的最佳候选超过已有父代记录；
-4. 新鲜的候选确认 pass@1 严格高于新鲜的父代重测 pass@1。
+1. Ruff、pytest 和自进化 CLI 启动检查全部通过；
+2. 探索阶段选出的最佳候选超过已有父代记录；
+3. 新鲜的候选确认 pass@1 严格高于新鲜的父代重测 pass@1。
 
 pass@1 相同的候选即使成本更低也不会晋级。
 如果 baseline 或已接受父代的 pass@1 已达到 `1.0`，运行会在 Diagnosis 和自修改之前提前
@@ -236,7 +224,7 @@ evolution/runs/<run_name>/
 各文件含义：
 
 - `config.json`：本次演化实验的固定配置；
-- `evaluation_contract.json`：当前 benchmark 的目标、直接生效路径和延迟生效路径；
+- `evaluation_contract.json`：当前 benchmark 的名称和任务目标；
 - `state.json`：当前代数、当前提交和父代评分；
 - `evolution_memory.jsonl`：所有已完成代的诊断、修改、指标和接受/拒绝结果；
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
@@ -335,9 +323,8 @@ prerequisites             实现长期价值需要的前置条件
 可以作为次级观测，但不能单独成为当前代的进化目标；Diagnosis 也不得把
 `passed=true` 的 `max_steps` 案例描述成没有完成任务。
 
-Planner 还会收到真实的可演化根目录和其中已有的文件清单。`likely_files` 必须位于这些
-可演化路径内，可以引用已有文件，也可以提出在可演化目录中新建文件；边界外的虚构路径会
-触发自动修复重试。
+Planner 还会收到项目根目录和 Git 已跟踪文件清单。`likely_files` 可以引用已有项目文件，
+也可以提出新的项目相对路径；逃逸项目目录的路径会触发自动修复重试。
 
 长期价值目前只用于记录研究假设。一个修改即使可能帮助未来进化，仍必须通过当前固定测试、
 pass@1 晋级规则；本阶段不会因为推测性的长期价值接受当前无收益的候选。后续
@@ -359,15 +346,11 @@ accepted / rejected、原因和 resulting commit
 ```text
 no_change          自修改执行没有产生源码 diff，尚未检验演化假设
 validation_failed  产生了 diff，但固定代码检查失败，尚未进入任务评测
-deferred_change    修改只会影响后续自进化，当前 benchmark 无法评价
-mixed_change_scope 同时修改直接与延迟生效代码，无法归因
-unclassified_change 包含 Evaluation Contract 未声明的修改路径
 benchmark_rejected 通过固定检查，但任务评测没有满足晋级条件
 accepted           通过固定检查和任务评测并已提交
 ```
 
-Planner 会把没有进入 benchmark 的结果视为执行或评测契约不匹配，而不是该演化方向已经被
-基准否定。
+Planner 会把没有进入 benchmark 的结果视为执行失败，而不是该演化方向已经被基准否定。
 
 Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复提出已被拒绝的假设。自修改
 执行器会优先读取与本次主要层或关联层匹配的历史，同时补充最近的其他记录。历史只作为

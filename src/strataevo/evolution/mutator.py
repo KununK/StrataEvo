@@ -96,9 +96,8 @@ Relevant prior evolution outcomes:
 
 Execution constraints:
 - Writable paths: {mutable_paths}
-- Only a patch confined to evaluation_contract.direct_paths can be scored by this benchmark.
-  deferred_paths remain inspectable and writable for future research, but changing them now is not
-  evidence of task-Agent improvement. Do not mix direct and deferred changes in one candidate.
+- Any version-controlled project file may be changed. Keep each candidate focused enough that its
+  effect can be understood from the diff and evaluation result.
 - Total model/tool steps available: {config.mutator_max_steps}
 - Refinement rounds available: {config.mutator_rounds}
 - Candidate benchmark evaluations available: {config.max_eval_attempts}
@@ -107,7 +106,7 @@ Execution constraints:
   evaluate the current diff and return the result in this same session. You may also call
   evaluate_candidate yourself when ready; repeated evaluation of an unchanged patch is cached.
 - Reserve enough steps for show_diff, evaluation feedback, and repairs.
-- Prefer the smallest direct change. Do not add a new subsystem when an existing prompt, tool,
+- Prefer the smallest coherent change. Do not add a new subsystem when an existing prompt, tool,
   schema, or control-flow check can address the evidence.
 - replace_text requires an exact match. After one mismatch, read the relevant lines and use
   replace_lines instead of repeatedly guessing whitespace.

@@ -6,7 +6,6 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .contract import ChangeImpact
 from .evaluation import Evaluator, run_commands
 from .git import GitRepository
 from .io import write_json
@@ -22,7 +21,6 @@ class EvaluationAttempt:
     patch_path: str | None
     validation_log: str | None
     report: dict | None
-    change_impact: dict | None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -85,7 +83,6 @@ class CandidateEvaluationSession:
                 None,
                 None,
                 None,
-                None,
             )
             return self._finish_attempt(
                 attempt,
@@ -120,26 +117,6 @@ class CandidateEvaluationSession:
         attempt_dir.mkdir(parents=True, exist_ok=False)
         patch_path = attempt_dir / "changes.patch"
         patch_path.write_text(patch, encoding="utf-8")
-        impact = self.evaluator.contract.classify(changed_paths)
-        scope_error = _scope_error(impact)
-        if scope_error:
-            attempt = EvaluationAttempt(
-                number,
-                scope_error[0],
-                scope_error[1],
-                changed_paths,
-                str(patch_path),
-                None,
-                None,
-                impact.to_dict(),
-            )
-            self._restore(self._best_improving_attempt())
-            return self._finish_attempt(
-                attempt,
-                candidate_retained=False,
-                working_tree_state=self._working_tree_state,
-            )
-
         print(
             f"[evolution] candidate check {number}: validating",
             flush=True,
@@ -160,7 +137,6 @@ class CandidateEvaluationSession:
                 str(patch_path),
                 str(validation_log),
                 None,
-                impact.to_dict(),
             )
             return self._finish_attempt(
                 attempt,
@@ -184,7 +160,6 @@ class CandidateEvaluationSession:
                 str(patch_path),
                 str(validation_log),
                 None,
-                impact.to_dict(),
             )
             return self._finish_attempt(
                 attempt,
@@ -212,7 +187,6 @@ class CandidateEvaluationSession:
             str(patch_path),
             str(validation_log),
             report.to_dict(),
-            impact.to_dict(),
         )
         if regressed:
             self._restore(restore_attempt)
@@ -305,7 +279,6 @@ class CandidateEvaluationSession:
             "candidate_task_score": report["task_score"] if report else None,
             "evidence_path": report["metrics"].get("evidence_path") if report else None,
             "signal_counts": report["metrics"].get("evidence_signal_counts") if report else None,
-            "change_impact": attempt.change_impact,
             "candidate_retained": candidate_retained,
             "working_tree_state": working_tree_state,
         }
@@ -321,16 +294,7 @@ class CandidateEvaluationSession:
                 f"The submitted patch is not active; the working tree now contains "
                 f"the {working_tree_state.replace('_', ' ')}."
             )
-        if attempt.outcome_type in {
-            "deferred_change",
-            "mixed_change_scope",
-            "unclassified_change",
-        }:
-            next_action = (
-                "This patch cannot be attributed to the active benchmark. Make one focused change "
-                "only under its direct_paths, or stop."
-            )
-        elif attempt.outcome_type == "validation_failed":
+        if attempt.outcome_type == "validation_failed":
             next_action = (
                 "Correct the reported validation errors before requesting another check. "
                 "Use read_file as the source of truth; diagnostic gutters are annotations, "
@@ -381,22 +345,3 @@ class CandidateEvaluationSession:
 def _last_output(output: str, limit: int = 4000) -> str:
     text = output.strip()
     return text[-limit:] if text else "fixed validation commands failed"
-
-
-def _scope_error(impact: ChangeImpact) -> tuple[str, str] | None:
-    if impact.unclassified_paths:
-        return (
-            "unclassified_change",
-            "the evaluation contract does not classify every changed path",
-        )
-    if impact.direct_paths and impact.deferred_paths:
-        return (
-            "mixed_change_scope",
-            "patch mixes code used by this benchmark with code that only affects later generations",
-        )
-    if impact.deferred_paths:
-        return (
-            "deferred_change",
-            "changed code is not loaded by this benchmark and cannot receive its task score",
-        )
-    return None

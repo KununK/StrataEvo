@@ -7,6 +7,10 @@ build/
 dist/
 *.egg-info/
 .venv/
+.env
+.env.*
+*.key
+*.pem
 eval/logs/
 eval/outputs/
 evolution/runs/

@@ -180,15 +180,18 @@ benchmark -> Evidence -> 四层 Diagnosis -> Evolution Plan
 选择一项能够提升 `task_score` 的假设。自修改 Agent 默认共享 200 个 step、5 个 refinement
 round 和 5 次候选 benchmark 配额。
 
-Evaluation Contract 声明当前 benchmark 能直接观察哪些代码。当前 HumanEval 和 MBPP 都
-直接评测 `src/tinyagent/`；只影响以后自修改行为的代码不能借用本轮任务分数晋级。探索阶段
-只负责选择候选，随后会重新评测父代与候选。新鲜候选的 pass@1 严格更高才会提交，否则恢复
-父代。步数、Token 和时间继续记录为研究指标，但不混入晋级分数。
+当前开放模式允许自修改 Agent 改动整个受 Git 管理的项目，包括 `src/`、`eval/`、`tests/`
+和配置。Git 元数据、虚拟环境、缓存、实验记录、评测输出和密钥保持不可写。探索阶段只负责
+选择候选，随后会重新评测父代与候选；新鲜候选的 pass@1 严格更高才会提交，否则恢复父代。
+步数、Token 和时间继续记录为研究指标，但不混入晋级分数。
+
+第一版有意允许候选修改 evaluator 和 tests，因此分数提升属于开放式自修改结果，可能来自
+Agent 能力、评测修复或评测标准变化，必须结合 patch 人工分析，不能直接等同于任务能力提升。
 
 ```bash
 strataevo \
   --run-name humaneval-dev \
-  --branch evo_test_inter \
+  --branch evo_fullstack_tta \
   --benchmark humaneval \
   --generations 1 \
   --eval-limit 5
@@ -204,7 +207,7 @@ strataevo \
 ```bash
 strataevo \
   --run-name mbpp-full-1 \
-  --branch evo_test_inter \
+  --branch evo_fullstack_tta \
   --benchmark mbpp \
   --generations 5 \
   --eval-workers 10

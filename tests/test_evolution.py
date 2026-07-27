@@ -29,20 +29,20 @@ from tinyagent import AgentResult, Message, Usage
 TEST_CONTRACT = EvaluationContract(
     benchmark="test",
     objective="test direct agent behavior",
-    direct_paths=("src/tinyagent",),
-    deferred_paths=("src/strataevo/evolution/mutator.py",),
 )
 
 
 class EvolutionTests(unittest.TestCase):
     def test_mutator_default_reserves_repair_budget(self):
         args = parse_args([])
+        config = EvolutionConfig(repo=".", run_name="test")
         self.assertEqual(args.benchmark, "humaneval")
         self.assertEqual(args.mutator_max_steps, 200)
         self.assertEqual(args.mutator_rounds, 5)
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
         self.assertIsNone(args.eval_limit)
+        self.assertEqual(config.mutable_paths, ["."])
 
     def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
         class FakeAgent:
@@ -101,12 +101,14 @@ class EvolutionTests(unittest.TestCase):
         config = EvolutionConfig.from_dict({"repo": ".", "run_name": "old-run"})
         self.assertEqual(config.mutator_rounds, 5)
 
-    def test_self_workspace_can_only_write_evolvable_source(self):
+    def test_self_workspace_can_write_project_but_not_runtime_state(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "src/tinyagent").mkdir(parents=True)
             (root / "tests").mkdir()
-            workspace = SelfWorkspace(root, ["src/tinyagent"], [])
+            (root / ".gitignore").write_text(".venv/\nevolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            workspace = SelfWorkspace(root, ["."], [])
             tools = {item.name: item for item in workspace.tools()}
 
             tools["write_file"].run({"path": "src/tinyagent/new.py", "content": "VALUE = 1\n"})
@@ -126,8 +128,16 @@ class EvolutionTests(unittest.TestCase):
                 (root / "src/tinyagent/new.py").read_text(encoding="utf-8"),
                 "VALUE = 2\n",
             )
+            tools["write_file"].run(
+                {"path": "tests/test_new.py", "content": "def test_new(): pass\n"}
+            )
+            self.assertTrue((root / "tests/test_new.py").is_file())
             with self.assertRaises(PermissionError):
-                tools["write_file"].run({"path": "tests/test_backdoor.py", "content": "pass\n"})
+                tools["write_file"].run({"path": "evolution/runs/result.json", "content": "{}\n"})
+            with self.assertRaises(PermissionError):
+                tools["read_file"].run({"path": ".git/config"})
+            with self.assertRaises(PermissionError):
+                tools["write_file"].run({"path": ".env", "content": "TOKEN=secret\n"})
 
     def test_git_repository_rolls_back_tracked_and_new_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,6 +167,30 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(existing.read_text(encoding="utf-8"), "OLD = True\n")
             self.assertFalse(added.exists())
             repository.ensure_clean()
+
+    def test_git_repository_never_collects_runtime_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "src/agent.py").write_text("VALUE = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+
+            (root / ".gitignore").write_text("", encoding="utf-8")
+            output = root / "evolution/runs/test/result.json"
+            output.parent.mkdir(parents=True)
+            output.write_text("{}\n", encoding="utf-8")
+            repository = GitRepository(root, ["."])
+
+            self.assertEqual(repository.changed_paths(), [".gitignore"])
+            repository.stage()
+            self.assertNotIn("evolution/runs/test/result.json", repository.staged_diff())
+            repository.rollback()
+            self.assertTrue(output.is_file())
 
     def test_validation_failure_does_not_use_benchmark_budget(self):
         with tempfile.TemporaryDirectory() as directory:

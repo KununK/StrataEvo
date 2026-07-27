@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .workspace import remove_path
+from .workspace import PROTECTED_WRITE_ROOTS, remove_path
 
 
 class GitRepository:
@@ -39,22 +39,22 @@ class GitRepository:
 
     def changed_paths(self) -> list[str]:
         tracked = self._run(
-            ["diff", "--name-only", "--", *self.mutable_paths], capture=True
+            ["diff", "--name-only", "--", *self._pathspecs()], capture=True
         ).splitlines()
         staged = self._run(
-            ["diff", "--cached", "--name-only", "--", *self.mutable_paths], capture=True
+            ["diff", "--cached", "--name-only", "--", *self._pathspecs()], capture=True
         ).splitlines()
         untracked = self._run(
-            ["ls-files", "--others", "--exclude-standard", "--", *self.mutable_paths],
+            ["ls-files", "--others", "--exclude-standard", "--", *self._pathspecs()],
             capture=True,
         ).splitlines()
         return sorted(set(filter(None, [*tracked, *staged, *untracked])))
 
     def stage(self) -> None:
-        self._run(["add", "-A", "--", *self.mutable_paths])
+        self._run(["add", "-A", "--", *self._pathspecs()])
 
     def staged_diff(self) -> str:
-        return self._run(["diff", "--cached", "--binary", "--", *self.mutable_paths], capture=True)
+        return self._run(["diff", "--cached", "--binary", "--", *self._pathspecs()], capture=True)
 
     def commit(self, message: str) -> str:
         self._run(["commit", "-m", message])
@@ -72,15 +72,19 @@ class GitRepository:
             raise RuntimeError(f"git apply failed: {completed.stderr.strip()}")
 
     def rollback(self) -> None:
-        self._run(["restore", "--staged", "--worktree", "--", *self.mutable_paths])
+        self._run(["restore", "--staged", "--worktree", "--", *self._pathspecs()])
         untracked = self._run(
-            ["ls-files", "--others", "--exclude-standard", "--", *self.mutable_paths],
+            ["ls-files", "--others", "--exclude-standard", "--", *self._pathspecs()],
             capture=True,
         ).splitlines()
         for relative in untracked:
             target = (self.root / relative).resolve()
             if target.is_relative_to(self.root):
                 remove_path(target)
+
+    def _pathspecs(self) -> list[str]:
+        excluded = [f":(exclude){path}" for path in sorted(PROTECTED_WRITE_ROOTS)]
+        return [*self.mutable_paths, *excluded]
 
     def _run(self, arguments: list[str], *, capture: bool = False) -> str:
         completed = subprocess.run(
