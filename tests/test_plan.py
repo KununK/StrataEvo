@@ -60,6 +60,49 @@ class EvolutionPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match"):
             EvolutionPlanner(model, repair_retries=0).create_plan(self._diagnosis(), self._parent())
 
+    def test_forced_model_layer_selects_model_diagnosis(self):
+        diagnosis = self._diagnosis()
+        diagnosis.diagnoses.append(
+            Diagnosis(
+                primary_layer=EvolutionLayer.MODEL,
+                related_layers=[],
+                problem="The model produces incorrect algorithms.",
+                evidence=["HumanEval/2 failed its assertions."],
+                affected_tasks=["HumanEval/2"],
+                proposed_direction="Adapt the model from verified trajectories.",
+                confidence=0.8,
+            )
+        )
+        plan = self._plan()
+        plan.update(
+            {
+                "target_diagnosis": 2,
+                "primary_layer": "model",
+                "likely_files": [],
+            }
+        )
+        model = ScriptedModel([Message("assistant", json.dumps(plan))])
+
+        report = EvolutionPlanner(model).create_plan(
+            diagnosis,
+            self._parent(),
+            model_evolution=True,
+            force_layer=EvolutionLayer.MODEL,
+        )
+
+        self.assertEqual(report.plan.primary_layer, EvolutionLayer.MODEL)
+        self.assertIn('"forced_layer": "model"', model.requests[0][1].content)
+
+    def test_forced_layer_requires_matching_diagnosis(self):
+        model = ScriptedModel([])
+        with self.assertRaisesRegex(ValueError, "contains no 'model' problem"):
+            EvolutionPlanner(model).create_plan(
+                self._diagnosis(),
+                self._parent(),
+                model_evolution=True,
+                force_layer=EvolutionLayer.MODEL,
+            )
+
     def test_unavailable_metric_is_repaired_once(self):
         invalid = self._plan()
         invalid["expected_outcomes"][0]["metric"] = "future_capability"

@@ -84,6 +84,7 @@ class EvolutionPlan:
         available_metrics: set[str],
         mutable_paths: list[str],
         model_evolution: bool = False,
+        force_layer: EvolutionLayer | None = None,
     ) -> EvolutionPlan:
         target = data.get("target_diagnosis")
         if not isinstance(target, int) or isinstance(target, bool):
@@ -100,6 +101,8 @@ class EvolutionPlan:
                 f"plan layer {primary_layer.value!r} does not match selected diagnosis "
                 f"layer {diagnosed_layer.value!r}"
             )
+        if force_layer is not None and primary_layer is not force_layer:
+            raise ValueError(f"plan must select forced layer {force_layer.value!r}")
         hypothesis = _required_text(data, "hypothesis")
         intervention = _required_text(data, "intervention")
         expected_long_term_value = _required_text(data, "expected_long_term_value")
@@ -175,9 +178,14 @@ class EvolutionPlanner:
         existing_files: list[str] | None = None,
         evaluation_contract: EvaluationContract | None = None,
         model_evolution: bool = False,
+        force_layer: EvolutionLayer | None = None,
     ) -> EvolutionPlanReport:
         mutable_paths = list(mutable_paths or DEFAULT_MUTABLE_PATHS)
         available_metrics = evaluation_metrics(parent_report.to_dict())
+        if force_layer is not None and not any(
+            item.primary_layer is force_layer for item in diagnosis.diagnoses
+        ):
+            raise ValueError(f"diagnosis contains no {force_layer.value!r} problem to force")
         payload = {
             "diagnoses": [item.to_dict() for item in diagnosis.diagnoses],
             "available_metrics": available_metrics,
@@ -197,6 +205,7 @@ class EvolutionPlanner:
                 "enabled": model_evolution,
                 "mechanism": "verifier-guided test-time LoRA SFT",
             },
+            "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(history or [], max_chars=12_000),
         }
         messages = [
@@ -218,6 +227,7 @@ class EvolutionPlanner:
                 set(available_metrics),
                 mutable_paths,
                 model_evolution,
+                force_layer,
             ),
             label="evolution plan",
             repair_retries=self.repair_retries,
@@ -260,6 +270,7 @@ the active benchmark. Plan only a change under direct_paths. Never claim that a 
 validated by an immediate benchmark score. The one exception is a primary_layer=model plan when
 model_evolution.enabled is true: it trains a LoRA adapter from verifier-passing trajectories and
 must use an empty likely_files list because it changes weights rather than repository files.
+When forced_layer is not null, select a diagnosis whose primary_layer exactly matches it.
 
 Return exactly this JSON object:
 {
@@ -289,6 +300,7 @@ def plan_evolution(
     destination: str | Path,
     evaluation_contract: EvaluationContract | None = None,
 ) -> EvolutionPlanReport:
+    forced_layer = EvolutionLayer(config.force_layer) if config.force_layer else None
     eligible_paths = (
         list(evaluation_contract.direct_paths)
         if evaluation_contract is not None
@@ -309,6 +321,7 @@ def plan_evolution(
         existing_files=existing_files,
         evaluation_contract=evaluation_contract,
         model_evolution=config.model_evolution,
+        force_layer=forced_layer,
     )
     write_json(destination, report.to_dict())
     return report

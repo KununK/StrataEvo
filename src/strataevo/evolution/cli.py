@@ -40,6 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
     parser.add_argument("--enable-model-evolution", action="store_true")
+    parser.add_argument("--force-layer", choices=("model",))
     parser.add_argument("--sft-device", default="1")
     parser.add_argument("--sft-max-steps", type=int, default=20)
     parser.add_argument("--sft-max-samples", type=int, default=32)
@@ -86,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
             eval_workers=args.eval_workers,
             benchmark_max_steps=args.benchmark_max_steps,
             model_evolution=args.enable_model_evolution,
+            force_layer=args.force_layer,
             sft_device=args.sft_device,
             sft_max_steps=args.sft_max_steps,
             sft_max_samples=args.sft_max_samples,
@@ -510,6 +512,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("eval-offset must be non-negative and eval-limit must be positive")
     if args.sft_learning_rate <= 0:
         raise ValueError("sft-learning-rate must be positive")
+    if args.force_layer == "model" and not args.enable_model_evolution:
+        raise ValueError("--force-layer model requires --enable-model-evolution")
 
 
 def _print_generation(record: GenerationRecord) -> None:

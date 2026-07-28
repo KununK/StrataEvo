@@ -109,6 +109,7 @@ strataevo \
 --eval-workers            同时发送给 vLLM 的评测 Agent 数量
 --benchmark-max-steps     每个被评测 Agent 的最大工具循环步数
 --enable-model-evolution  允许 model 计划执行 verifier-guided LoRA SFT
+--force-layer model       强制选择一个 model 诊断，仅用于链路测试
 --sft-device              LoRA 训练使用的物理 GPU，默认 1
 --sft-max-steps           每个模型候选的训练步数，默认 20
 ```

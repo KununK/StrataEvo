@@ -26,6 +26,7 @@ class EvolutionConfig:
     benchmark_max_steps: int = 12
     test_timeout: float = 10.0
     model_evolution: bool = False
+    force_layer: str | None = None
     sft_device: str = "1"
     sft_max_steps: int = 20
     sft_max_samples: int = 32

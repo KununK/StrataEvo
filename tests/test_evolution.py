@@ -9,6 +9,7 @@ from strataevo.evolution.attempts import CandidateEvaluationSession
 from strataevo.evolution.cli import (
     _prepare_generation_dir,
     _promotion_decision,
+    _validate_args,
     parse_args,
     run_one_generation,
 )
@@ -43,6 +44,17 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
         self.assertIsNone(args.eval_limit)
+
+    def test_forced_model_layer_requires_model_evolution(self):
+        invalid = parse_args(["--force-layer", "model"])
+        with self.assertRaisesRegex(ValueError, "requires --enable-model-evolution"):
+            _validate_args(invalid)
+
+        valid = parse_args(
+            ["--force-layer", "model", "--enable-model-evolution"]
+        )
+        _validate_args(valid)
+        self.assertEqual(valid.force_layer, "model")
 
     def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
         class FakeAgent:

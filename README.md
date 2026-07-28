@@ -226,10 +226,12 @@ strataevo \
   --eval-limit 30 \
   --eval-workers 10 \
   --enable-model-evolution \
+  --force-layer model \
   --sft-device 1
 ```
 
-只有 Diagnosis 与 Plan 选择 `model` 层时才训练。默认每次最多取 32 条通过轨迹，进行
+`--force-layer model` 用于单独验证模型进化链路；正式自主实验应省略该参数，由 Diagnosis
+与 Plan 选择演化层。默认每次最多取 32 条通过轨迹，进行
 20 step、rank 8 的 LoRA SFT；候选仍需经过筛选和新鲜父子复测。源码候选继续由 Git
 提交或回滚，模型候选则保存在对应 generation 的 `model/adapter/`，并在 `state.json`
 和 `evolution_memory.jsonl` 中记录其父代和路径。
