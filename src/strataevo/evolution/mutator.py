@@ -71,7 +71,11 @@ def mutate(
     selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
     diagnosed_problem = json.dumps(selected_diagnosis.to_dict(), indent=2, ensure_ascii=False)
     evolution_plan = json.dumps(plan_report.plan.to_dict(), indent=2, ensure_ascii=False)
-    prior_evolution = json.dumps(memory_context(history), indent=2, ensure_ascii=False)
+    prior_evolution = json.dumps(
+        memory_context(history, max_chars=12_000),
+        indent=2,
+        ensure_ascii=False,
+    )
     mutable_paths = json.dumps(config.mutable_paths, ensure_ascii=False)
     contract = json.dumps(evaluation_contract.to_dict(), indent=2, ensure_ascii=False)
     prompt = f"""Create generation {generation} by improving your own implementation.

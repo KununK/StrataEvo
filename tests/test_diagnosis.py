@@ -159,7 +159,8 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(report.input_tokens, 30)
         self.assertEqual(report.output_tokens, 6)
         self.assertEqual(report.attempts[0], "not json")
-        self.assertIn("JSON was invalid", model.requests[1][-1].content)
+        self.assertIn("response was invalid", model.requests[1][-1].content)
+        self.assertNotIn("not json", model.requests[1][-1].content)
 
     def test_diagnosis_requires_affected_task(self):
         response = {
@@ -179,6 +180,38 @@ class DiagnosisTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "affected_tasks"):
             EvidenceDiagnoser(model, repair_retries=0).diagnose(self._bundle())
+
+    def test_diagnosis_evidence_stays_within_context_budget(self):
+        response = {
+            "diagnoses": [
+                {
+                    "primary_layer": "tools",
+                    "related_layers": [],
+                    "problem": "The required artifact was deleted.",
+                    "evidence": ["HumanEval/25 ran a destructive command."],
+                    "affected_tasks": ["HumanEval/25"],
+                    "proposed_direction": "Preserve required artifacts.",
+                    "confidence": 0.9,
+                }
+            ]
+        }
+        model = ScriptedModel([Message("assistant", json.dumps(response))])
+        bundle = self._bundle()
+        bundle.cases.extend(
+            replace(
+                bundle.cases[0],
+                task_id=f"HumanEval/{number}",
+                shell_commands=["x" * 20_000],
+            )
+            for number in range(26, 66)
+        )
+        limit = 12_000
+
+        report = EvidenceDiagnoser(model, context_limit_chars=limit).diagnose(bundle)
+
+        request_size = sum(len(message.content) for message in model.requests[0])
+        self.assertLessEqual(request_size, limit)
+        self.assertLess(report.input_case_count, len(bundle.cases))
 
     @staticmethod
     def _bundle() -> EvidenceBundle:

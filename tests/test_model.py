@@ -73,6 +73,64 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(sent["messages"][0]["content"], "find papers")
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
 
+    @patch("urllib.request.urlopen")
+    def test_structured_request_options_are_sent(self, urlopen):
+        urlopen.return_value = FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "{}"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+        model = OpenAICompatibleModel("test-model", base_url="http://model.test/v1")
+
+        model.complete(
+            [Message("user", "return json")],
+            [],
+            max_tokens=512,
+            response_format={"type": "json_object"},
+        )
+
+        sent = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(sent["max_tokens"], 512)
+        self.assertEqual(sent["response_format"], {"type": "json_object"})
+
+    @patch("urllib.request.urlopen")
+    def test_empty_tool_result_is_sent_as_a_string(self, urlopen):
+        urlopen.return_value = FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+        model = OpenAICompatibleModel("test-model", base_url="http://model.test/v1")
+
+        model.complete(
+            [Message("tool", "", tool_call_id="call_1", name="read_file")],
+            [],
+        )
+
+        sent = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(sent["messages"][0]["content"], "")
+
+    @patch("urllib.request.urlopen", side_effect=TimeoutError)
+    def test_timeout_has_a_clear_model_error(self, _urlopen):
+        model = OpenAICompatibleModel(
+            "test-model",
+            base_url="http://model.test/v1",
+            timeout=30,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "timed out after 30s"):
+            model.complete([Message("user", "hello")], [])
+
     @patch.dict(os.environ, {"OPENAI_BASE_URL": "http://environment.test/v1"})
     def test_explicit_base_url_has_priority_over_environment(self):
         model = OpenAICompatibleModel("test-model", base_url="http://explicit.test/v1")

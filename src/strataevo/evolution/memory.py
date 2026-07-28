@@ -246,8 +246,24 @@ class EvolutionMemory:
         temporary.replace(self.path)
 
 
-def memory_context(entries: list[EvolutionMemoryEntry]) -> list[dict[str, Any]]:
-    return [entry.to_context_dict() for entry in entries]
+def memory_context(
+    entries: list[EvolutionMemoryEntry],
+    max_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    items = [entry.to_context_dict() for entry in entries]
+    if max_chars is None:
+        return items
+    if max_chars <= 0:
+        raise ValueError("memory context max_chars must be positive")
+    selected: list[dict[str, Any]] = []
+    size = 2
+    for item in reversed(items):
+        item_size = len(json.dumps(item, ensure_ascii=False)) + 1
+        if size + item_size > max_chars:
+            continue
+        selected.append(item)
+        size += item_size
+    return list(reversed(selected))
 
 
 def _string_list(value: Any, field_name: str) -> list[str]:

@@ -1,8 +1,14 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from strataevo.evolution.memory import EvolutionMemory, EvolutionMemoryEntry, MemoryDiagnosis
+from strataevo.evolution.memory import (
+    EvolutionMemory,
+    EvolutionMemoryEntry,
+    MemoryDiagnosis,
+    memory_context,
+)
 
 
 class EvolutionMemoryTests(unittest.TestCase):
@@ -49,6 +55,14 @@ class EvolutionMemoryTests(unittest.TestCase):
                 loaded = EvolutionMemoryEntry.from_dict(data)
 
                 self.assertEqual(loaded.outcome_type, outcome)
+
+    def test_memory_context_budget_keeps_the_newest_entries(self):
+        entries = [self._entry(number, "context", "rejected") for number in range(1, 4)]
+        newest_size = len(json.dumps(entries[-1].to_context_dict())) + 3
+
+        context = memory_context(entries, max_chars=newest_size)
+
+        self.assertEqual([item["generation"] for item in context], [3])
 
     @staticmethod
     def _entry(

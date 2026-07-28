@@ -9,6 +9,8 @@ from typing import Any
 
 from tinyagent import Message, Model
 
+STRUCTURED_MAX_TOKENS = 2048
+
 
 @dataclass(slots=True)
 class StructuredResponse[T]:
@@ -32,7 +34,21 @@ def request_json[T](
     output_tokens = 0
     last_error: ValueError | None = None
     for attempt_number in range(repair_retries + 1):
-        response = model.complete(messages, [])
+        request = list(messages)
+        if last_error is not None:
+            request.append(
+                Message(
+                    "user",
+                    f"The previous {label} response was invalid: {last_error}. "
+                    "Return a new valid JSON object only.",
+                )
+            )
+        response = model.complete(
+            request,
+            [],
+            max_tokens=STRUCTURED_MAX_TOKENS,
+            response_format={"type": "json_object"},
+        )
         raw_output = response.message.content
         attempts.append(raw_output)
         input_tokens += response.usage.input_tokens
@@ -43,15 +59,6 @@ def request_json[T](
             last_error = ValueError(str(error))
             if attempt_number == repair_retries:
                 break
-            messages.extend(
-                [
-                    response.message,
-                    Message(
-                        "user",
-                        f"Your {label} JSON was invalid: {error}. Correct it and return only JSON.",
-                    ),
-                ]
-            )
             continue
         return StructuredResponse(value, input_tokens, output_tokens, raw_output, attempts)
     raise ValueError(

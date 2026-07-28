@@ -17,6 +17,9 @@ from .memory import EvolutionMemoryEntry, memory_context
 from .structured import request_json
 from .types import EvaluationReport, EvolutionConfig
 
+DEFAULT_CONTEXT_LIMIT_CHARS = 60_000
+MEMORY_LIMIT_CHARS = 12_000
+
 
 class EvolutionLayer(StrEnum):
     MODEL = "model"
@@ -98,21 +101,31 @@ class DiagnosisReport:
 class EvidenceDiagnoser:
     """Ask a model to cluster evidence and attribute each problem to an evolution layer."""
 
-    def __init__(self, model: Model, *, max_cases: int = 40, repair_retries: int = 1) -> None:
+    def __init__(
+        self,
+        model: Model,
+        *,
+        max_cases: int = 40,
+        repair_retries: int = 1,
+        context_limit_chars: int = DEFAULT_CONTEXT_LIMIT_CHARS,
+    ) -> None:
         if max_cases <= 0:
             raise ValueError("max_cases must be positive")
         if repair_retries < 0:
             raise ValueError("repair_retries must be non-negative")
+        if context_limit_chars <= len(DIAGNOSIS_SYSTEM_PROMPT):
+            raise ValueError("context_limit_chars is too small")
         self.model = model
         self.max_cases = max_cases
         self.repair_retries = repair_retries
+        self.context_limit_chars = context_limit_chars
 
     def diagnose(
         self,
         bundle: EvidenceBundle,
         history: list[EvolutionMemoryEntry] | None = None,
     ) -> DiagnosisReport:
-        cases = _select_cases(bundle.cases, self.max_cases)
+        candidates = _select_cases(bundle.cases, self.max_cases)
         payload = {
             "evaluator": bundle.evaluator,
             "summary": bundle.summary,
@@ -122,9 +135,21 @@ class EvidenceDiagnoser:
                 "meaning": "pass@1",
                 "requires_strict_improvement": True,
             },
-            "cases": [_compact_case(case) for case in cases],
-            "prior_evolution": memory_context(history or []),
+            "cases": [],
+            "prior_evolution": memory_context(
+                history or [],
+                max_chars=min(MEMORY_LIMIT_CHARS, self.context_limit_chars // 5),
+            ),
         }
+        cases: list[TaskEvidence] = []
+        for case in candidates:
+            payload["cases"].append(_compact_case(case))
+            if _message_size(payload) > self.context_limit_chars:
+                payload["cases"].pop()
+                continue
+            cases.append(case)
+        if not cases:
+            raise ValueError("diagnosis context budget cannot fit one evidence case")
         messages = [
             Message("system", DIAGNOSIS_SYSTEM_PROMPT),
             Message(
@@ -237,8 +262,8 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
         "steps": case.steps,
         "candidate_present": case.candidate_present,
         "candidate_created": case.candidate_created,
-        "tool_sequence": case.tool_sequence,
-        "shell_commands": case.shell_commands,
+        "tool_sequence": case.tool_sequence[:40],
+        "shell_commands": _text_items_within(case.shell_commands, 6000),
         "error": case.error[:1000],
         "signals": case.signals,
         "candidate_path": case.candidate_path,
@@ -257,6 +282,30 @@ def _candidate_excerpt(case: TaskEvidence) -> str:
         return path.read_text(encoding="utf-8")[:4000]
     except (OSError, UnicodeDecodeError):
         return ""
+
+
+def _message_size(payload: dict[str, Any]) -> int:
+    user_prefix = (
+        "Diagnose the following evaluation evidence. Return only the requested JSON.\n\n"
+    )
+    return (
+        len(DIAGNOSIS_SYSTEM_PROMPT)
+        + len(user_prefix)
+        + len(json.dumps(payload, indent=2, ensure_ascii=False))
+    )
+
+
+def _text_items_within(items: list[str], limit: int) -> list[str]:
+    selected: list[str] = []
+    size = 2
+    for item in items:
+        excerpt = item[:limit]
+        item_size = len(json.dumps(excerpt, ensure_ascii=False)) + 1
+        if size + item_size > limit:
+            break
+        selected.append(excerpt)
+        size += item_size
+    return selected
 
 
 def _parse_diagnoses(data: dict[str, Any], known_tasks: set[str]) -> list[Diagnosis]:

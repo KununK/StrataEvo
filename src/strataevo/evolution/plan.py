@@ -190,7 +190,7 @@ class EvolutionPlanner:
             "evaluation_contract": (
                 evaluation_contract.to_dict() if evaluation_contract is not None else None
             ),
-            "prior_evolution": memory_context(history or []),
+            "prior_evolution": memory_context(history or [], max_chars=12_000),
         }
         messages = [
             Message("system", PLANNER_SYSTEM_PROMPT),

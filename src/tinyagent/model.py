@@ -20,7 +20,12 @@ class Model(Protocol):
     """Anything that turns conversation history into one assistant message."""
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ModelResponse: ...
 
 
@@ -40,7 +45,12 @@ class OpenAICompatibleModel:
         self.base_url = base_url.rstrip("/")
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ModelResponse:
         body: dict[str, Any] = {
             "model": self.model,
@@ -50,6 +60,10 @@ class OpenAICompatibleModel:
         if tools:
             body["tools"] = list(tools)
             body["tool_choice"] = "auto"
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if response_format is not None:
+            body["response_format"] = response_format
 
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -68,6 +82,8 @@ class OpenAICompatibleModel:
             raise RuntimeError(f"model request failed ({error.code}): {detail}") from error
         except urllib.error.URLError as error:
             raise RuntimeError(f"model request failed: {error.reason}") from error
+        except TimeoutError as error:
+            raise RuntimeError(f"model request timed out after {self.timeout:g}s") from error
 
         choice = payload["choices"][0]
         raw = choice["message"]
@@ -95,7 +111,12 @@ class ScriptedModel:
         self.requests: list[list[Message]] = []
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ModelResponse:
         self.requests.append(list(messages))
         if not self.responses:
@@ -117,7 +138,10 @@ def _parse_arguments(raw: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def _message_to_openai(message: Message) -> dict[str, Any]:
-    data: dict[str, Any] = {"role": message.role, "content": message.content or None}
+    content: str | None = message.content
+    if message.role == "assistant" and message.tool_calls and not content:
+        content = None
+    data: dict[str, Any] = {"role": message.role, "content": content}
     if message.tool_calls:
         data["tool_calls"] = [
             {
