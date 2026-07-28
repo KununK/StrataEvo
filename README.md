@@ -67,6 +67,7 @@ source .venv/bin/activate
 | `MAX_MODEL_LEN` | `auto` |
 | `GPU_MEMORY_UTILIZATION` | `0.8` |
 | `TOOL_CALL_PARSER` | `qwen3_coder` |
+| `MAX_LORA_RANK` | `8` |
 
 所有配置都可以覆盖，额外参数会直接传给 `vllm serve`：
 
@@ -206,6 +207,32 @@ strataevo \
   --generations 5 \
   --eval-workers 10
 ```
+
+### Model 层进化
+
+第一版 Model Evolution 使用当前 benchmark 中 verifier 已确认通过的 Agent 轨迹进行
+test-time LoRA SFT。训练任务与随后评测的任务不分离，因此这是测试集参与的适应实验，
+不能报告为 held-out 泛化结果。LoRA 训练默认在物理 GPU 1 运行，vLLM 推理仍在 GPU 0。
+
+`vllm_serve.sh` 已默认启用 LoRA 和运行时 adapter 更新。重启服务后，在演化命令中显式开启：
+
+```bash
+strataevo \
+  --run-name mbpp-model-smoke \
+  --branch evo_reliable_sft \
+  --benchmark mbpp \
+  --generations 2 \
+  --eval-offset 60 \
+  --eval-limit 30 \
+  --eval-workers 10 \
+  --enable-model-evolution \
+  --sft-device 1
+```
+
+只有 Diagnosis 与 Plan 选择 `model` 层时才训练。默认每次最多取 32 条通过轨迹，进行
+20 step、rank 8 的 LoRA SFT；候选仍需经过筛选和新鲜父子复测。源码候选继续由 Git
+提交或回滚，模型候选则保存在对应 generation 的 `model/adapter/`，并在 `state.json`
+和 `evolution_memory.jsonl` 中记录其父代和路径。
 
 ## 工具与安全边界
 

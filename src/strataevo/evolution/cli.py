@@ -15,6 +15,7 @@ from .evaluation import BENCHMARKS, Evaluator, create_evaluator, validation_comm
 from .git import GitRepository
 from .io import read_json, write_json
 from .memory import EvolutionMemory, EvolutionMemoryEntry
+from .model_evolution import activate_saved_adapter, evolve_model
 from .mutator import mutate
 from .plan import EvolutionPlanReport, plan_evolution
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
@@ -38,6 +39,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-offset", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
+    parser.add_argument("--enable-model-evolution", action="store_true")
+    parser.add_argument("--sft-device", default="1")
+    parser.add_argument("--sft-max-steps", type=int, default=20)
+    parser.add_argument("--sft-max-samples", type=int, default=32)
+    parser.add_argument("--sft-max-length", type=int, default=4096)
+    parser.add_argument("--sft-lora-rank", type=int, default=8)
+    parser.add_argument("--sft-learning-rate", type=float, default=1e-4)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--worker-config", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -77,6 +85,13 @@ def main(argv: list[str] | None = None) -> int:
             eval_offset=args.eval_offset,
             eval_workers=args.eval_workers,
             benchmark_max_steps=args.benchmark_max_steps,
+            model_evolution=args.enable_model_evolution,
+            sft_device=args.sft_device,
+            sft_max_steps=args.sft_max_steps,
+            sft_max_samples=args.sft_max_samples,
+            sft_max_length=args.sft_max_length,
+            sft_lora_rank=args.sft_lora_rank,
+            sft_learning_rate=args.sft_learning_rate,
         )
         write_json(config_path, config.to_dict())
 
@@ -124,7 +139,9 @@ def run_one_generation(config_path: Path) -> int:
 
     evaluator = create_evaluator(repo, config)
     write_json(run_dir / "evaluation_contract.json", evaluator.contract.to_dict())
-    state = _load_or_create_state(state_path, git, evaluator, run_dir)
+    state = _load_or_create_state(state_path, git, evaluator, run_dir, config.model)
+    if config.model_evolution:
+        activate_saved_adapter(config, evaluator, state.get("current_adapter"))
     parent_report = EvaluationReport.from_dict(state["current_report"])
     if parent_report.task_score >= 1.0:
         state["completed"] = True
@@ -157,6 +174,56 @@ def run_one_generation(config_path: Path) -> int:
             plan_path,
             evaluator.contract,
         )
+        if plan_report.plan.primary_layer.value == "model" and config.model_evolution:
+            model_result = evolve_model(
+                config,
+                generation,
+                generation_dir,
+                parent_report,
+                evaluator,
+                parent_model=str(state.get("current_model", config.model)),
+                parent_adapter=state.get("current_adapter"),
+            )
+            if model_result.decision == "accepted":
+                state["current_model"] = model_result.candidate["name"]
+                state["current_adapter"] = model_result.candidate
+                state["current_report"] = model_result.candidate_report.to_dict()
+            record = _record(
+                generation,
+                parent_commit,
+                None,
+                model_result.decision,
+                model_result.outcome_type,
+                model_result.reason,
+                [],
+                None,
+                diagnosis_path,
+                diagnosis,
+                plan_path,
+                plan_report,
+                parent_report,
+                model_result.promotion_parent_report,
+                model_result.candidate_report,
+                None,
+                [],
+                model_candidate=model_result.candidate,
+            )
+            summary = (
+                f"LoRA candidate {model_result.candidate['name']}: "
+                f"{model_result.reason}"
+            )
+            _finish_generation(
+                state_path,
+                state,
+                generation_dir,
+                record,
+                memory,
+                diagnosis,
+                plan_report,
+                summary,
+            )
+            _print_generation(record)
+            return 0
         selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
         mutation_layers = {
             selected_diagnosis.primary_layer.value,
@@ -238,7 +305,7 @@ def run_one_generation(config_path: Path) -> int:
                 memory,
                 diagnosis,
                 plan_report,
-                agent_result,
+                agent_result.output,
             )
             _print_generation(record)
             return 0
@@ -294,7 +361,7 @@ def run_one_generation(config_path: Path) -> int:
             memory,
             diagnosis,
             plan_report,
-            agent_result,
+            agent_result.output,
         )
         _print_generation(record)
         return 0
@@ -322,16 +389,21 @@ def _load_or_create_state(
     git: GitRepository,
     evaluator: Evaluator,
     run_dir: Path,
+    model: str,
 ) -> dict[str, Any]:
     if path.exists():
         state = read_json(path)
         if state["current_commit"] != git.head():
             raise RuntimeError("evolution state does not match the current Git revision")
+        state.setdefault("current_model", model)
+        state.setdefault("current_adapter", None)
         return state
     report = evaluator.evaluate(run_dir / "baseline" / "evaluation")
     state = {
         "next_generation": 1,
         "current_commit": git.head(),
+        "current_model": model,
+        "current_adapter": None,
         "current_report": report.to_dict(),
     }
     write_json(path, state)
@@ -367,6 +439,8 @@ def _record(
     candidate_report: EvaluationReport | None,
     agent_result: Any,
     evaluation_attempts: list[dict[str, Any]],
+    *,
+    model_candidate: dict[str, Any] | None = None,
 ) -> GenerationRecord:
     return GenerationRecord(
         generation=generation,
@@ -389,11 +463,12 @@ def _record(
             promotion_parent_report.to_dict() if promotion_parent_report else None
         ),
         candidate_report=candidate_report.to_dict() if candidate_report else None,
-        agent_stop_reason=agent_result.stop_reason,
-        agent_steps=agent_result.steps,
-        input_tokens=agent_result.usage.input_tokens,
-        output_tokens=agent_result.usage.output_tokens,
+        agent_stop_reason=agent_result.stop_reason if agent_result else "model_evolution",
+        agent_steps=agent_result.steps if agent_result else 0,
+        input_tokens=agent_result.usage.input_tokens if agent_result else 0,
+        output_tokens=agent_result.usage.output_tokens if agent_result else 0,
         evaluation_attempts=evaluation_attempts,
+        model_candidate=model_candidate,
     )
 
 
@@ -405,11 +480,11 @@ def _finish_generation(
     memory: EvolutionMemory,
     diagnosis: DiagnosisReport,
     plan_report: EvolutionPlanReport,
-    agent_result: Any,
+    agent_output: str,
 ) -> None:
     write_json(generation_dir / "record.json", record.to_dict())
     memory.append(
-        EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_result.output)
+        EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_output)
     )
     state["next_generation"] = record.generation + 1
     write_json(state_path, state)
@@ -423,12 +498,18 @@ def _validate_args(args: argparse.Namespace) -> None:
         "max-eval-attempts": args.max_eval_attempts,
         "eval-workers": args.eval_workers,
         "benchmark-max-steps": args.benchmark_max_steps,
+        "sft-max-steps": args.sft_max_steps,
+        "sft-max-samples": args.sft_max_samples,
+        "sft-max-length": args.sft_max_length,
+        "sft-lora-rank": args.sft_lora_rank,
     }
     for name, value in positive.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive")
     if args.eval_offset < 0 or args.eval_limit is not None and args.eval_limit <= 0:
         raise ValueError("eval-offset must be non-negative and eval-limit must be positive")
+    if args.sft_learning_rate <= 0:
+        raise ValueError("sft-learning-rate must be positive")
 
 
 def _print_generation(record: GenerationRecord) -> None:

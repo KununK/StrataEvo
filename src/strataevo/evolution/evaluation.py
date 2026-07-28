@@ -80,12 +80,16 @@ class BenchmarkEvaluator:
         self.repo = repo
         self.config = config
         self.spec = spec
+        self.model = config.model
         self.contract = EvaluationContract(
             benchmark=spec.display_name,
             objective=spec.objective,
             direct_paths=spec.direct_paths,
             deferred_paths=spec.deferred_paths,
         )
+
+    def set_model(self, model: str) -> None:
+        self.model = model
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:
         print(
@@ -97,7 +101,7 @@ class BenchmarkEvaluator:
             "-m",
             self.spec.module,
             "--model",
-            self.config.model,
+            self.model,
             "--base-url",
             self.config.base_url,
             "--output-dir",

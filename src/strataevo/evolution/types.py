@@ -25,6 +25,13 @@ class EvolutionConfig:
     eval_workers: int = 4
     benchmark_max_steps: int = 12
     test_timeout: float = 10.0
+    model_evolution: bool = False
+    sft_device: str = "1"
+    sft_max_steps: int = 20
+    sft_max_samples: int = 32
+    sft_max_length: int = 4096
+    sft_lora_rank: int = 8
+    sft_learning_rate: float = 1e-4
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,6 +90,7 @@ class GenerationRecord:
     input_tokens: int
     output_tokens: int
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
+    model_candidate: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

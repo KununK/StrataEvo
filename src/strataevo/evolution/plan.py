@@ -83,6 +83,7 @@ class EvolutionPlan:
         diagnosis: DiagnosisReport,
         available_metrics: set[str],
         mutable_paths: list[str],
+        model_evolution: bool = False,
     ) -> EvolutionPlan:
         target = data.get("target_diagnosis")
         if not isinstance(target, int) or isinstance(target, bool):
@@ -114,7 +115,8 @@ class EvolutionPlan:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError("plan confidence must be between 0 and 1")
         likely_files = _string_list(data.get("likely_files", []), "likely_files")
-        if not likely_files:
+        trains_adapter = primary_layer is EvolutionLayer.MODEL and model_evolution
+        if not likely_files and not trains_adapter:
             raise ValueError("plan likely_files must not be empty")
         invalid_files = [path for path in likely_files if not _is_mutable_path(path, mutable_paths)]
         if invalid_files:
@@ -172,6 +174,7 @@ class EvolutionPlanner:
         mutable_paths: list[str] | None = None,
         existing_files: list[str] | None = None,
         evaluation_contract: EvaluationContract | None = None,
+        model_evolution: bool = False,
     ) -> EvolutionPlanReport:
         mutable_paths = list(mutable_paths or DEFAULT_MUTABLE_PATHS)
         available_metrics = evaluation_metrics(parent_report.to_dict())
@@ -190,6 +193,10 @@ class EvolutionPlanner:
             "evaluation_contract": (
                 evaluation_contract.to_dict() if evaluation_contract is not None else None
             ),
+            "model_evolution": {
+                "enabled": model_evolution,
+                "mechanism": "verifier-guided test-time LoRA SFT",
+            },
             "prior_evolution": memory_context(history or [], max_chars=12_000),
         }
         messages = [
@@ -210,6 +217,7 @@ class EvolutionPlanner:
                 diagnosis,
                 set(available_metrics),
                 mutable_paths,
+                model_evolution,
             ),
             label="evolution plan",
             repair_retries=self.repair_retries,
@@ -249,7 +257,9 @@ paths guide the mutation but do not narrow its configured write permissions.
 The evaluation_contract is authoritative when present. Its direct_paths are loaded by the active
 benchmark and can be evaluated now. Its deferred_paths affect later evolution but are not loaded by
 the active benchmark. Plan only a change under direct_paths. Never claim that a deferred change is
-validated by an immediate benchmark score.
+validated by an immediate benchmark score. The one exception is a primary_layer=model plan when
+model_evolution.enabled is true: it trains a LoRA adapter from verifier-passing trajectories and
+must use an empty likely_files list because it changes weights rather than repository files.
 
 Return exactly this JSON object:
 {
@@ -298,6 +308,7 @@ def plan_evolution(
         mutable_paths=eligible_paths,
         existing_files=existing_files,
         evaluation_contract=evaluation_contract,
+        model_evolution=config.model_evolution,
     )
     write_json(destination, report.to_dict())
     return report

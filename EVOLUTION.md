@@ -44,6 +44,11 @@ src/strataevo/evolution/git.py  Git 提交和回滚
 
 如果不保留这条边界，Agent 就可能通过修改评测器提高报告分数，而不是真正提升自身能力。
 
+Model 层不修改 Git 工作树。显式传入 `--enable-model-evolution` 后，如果 Diagnosis 和
+Plan 选择 `model`，系统会从当前 benchmark 中筛选 verifier 通过的轨迹，在 GPU 1 上训练
+LoRA，并通过 GPU 0 的 vLLM 动态加载候选。该协议在同一批任务上训练和评测，属于测试时
+适应实验，不是 held-out 泛化评测。未选择 `model` 时仍执行原有源码进化。
+
 ## Evaluation Contract
 
 可写不代表可以被当前 benchmark 评价。每个 Evaluator 必须声明一份 Evaluation Contract，
@@ -103,6 +108,9 @@ strataevo \
 --eval-limit              使用的任务数量；默认不限制
 --eval-workers            同时发送给 vLLM 的评测 Agent 数量
 --benchmark-max-steps     每个被评测 Agent 的最大工具循环步数
+--enable-model-evolution  允许 model 计划执行 verifier-guided LoRA SFT
+--sft-device              LoRA 训练使用的物理 GPU，默认 1
+--sft-max-steps           每个模型候选的训练步数，默认 20
 ```
 
 `--mutator-max-steps` 默认是 `200`，`--mutator-rounds` 和 `--max-eval-attempts` 默认都是
@@ -180,6 +188,10 @@ pass@1 相同的候选即使成本更低也不会晋级。
 如果满足条件，修改会作为新一代提交到 `--branch` 指定的分支，下一代由新的 Python 进程加载。
 如果不满足条件，源码会恢复到父代，但本次尝试的补丁和评测记录仍会保留。
 
+LoRA 候选采用同一条严格父子复测规则，但不会创建 Git 提交。接受的 adapter 保存在
+generation 目录中，其名称、路径和父 adapter 写入 `state.json` 与 Evolution Memory；
+拒绝时从 vLLM 卸载候选并恢复父模型。
+
 在自修改过程中按 `Ctrl+C` 时，控制器会恢复所有尚未提交的可演化文件，并在当前 generation
 目录写入 `failure.json`。因此中断不会把未验证的候选留在 Git 工作区中。
 
@@ -215,6 +227,11 @@ evolution/runs/<run_name>/
 │   ├── plan.json
 │   ├── agent_result.json
 │   ├── record.json
+│   ├── model/                    # 仅 model 层计划存在
+│   │   ├── verified_trajectories.jsonl
+│   │   ├── train_config.json
+│   │   ├── train.log
+│   │   └── adapter/
 │   ├── attempt-0001/
 │   │   ├── attempt.json
 │   │   ├── changes.patch

@@ -109,6 +109,7 @@ class EvolutionMemoryEntry:
     parent_task_score: float
     candidate_task_score: float | None
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
+    model_candidate: dict[str, Any] | None = None
     outcome: MemoryOutcome = field(
         default_factory=lambda: MemoryOutcome(
             status="not_evaluated",
@@ -140,6 +141,7 @@ class EvolutionMemoryEntry:
                 "expected_outcomes": self.plan.get("expected_outcomes", []),
                 "changed_paths": self.changed_paths,
                 "patch_excerpt": self.patch_excerpt[:PATCH_CONTEXT_CHARS],
+                "model_candidate": self.model_candidate,
             },
             "outcome": self.outcome.to_context_dict(),
             "outcome_observations": self.outcome_observations,
@@ -168,6 +170,7 @@ class EvolutionMemoryEntry:
         for legacy in ("parent_utility", "candidate_utility", "utility_delta"):
             values.pop(legacy, None)
         values.setdefault("evaluation_attempts", [])
+        values.setdefault("model_candidate", None)
         if not isinstance(values["evaluation_attempts"], list) or not all(
             isinstance(item, dict) for item in values["evaluation_attempts"]
         ):
@@ -192,6 +195,7 @@ class EvolutionMemoryEntry:
             "mixed_change_scope",
             "unclassified_change",
             "benchmark_rejected",
+            "model_training_skipped",
         }:
             raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
         return entry
@@ -232,6 +236,7 @@ class EvolutionMemoryEntry:
             parent_task_score=float(parent["task_score"]),
             candidate_task_score=float(candidate["task_score"]) if candidate else None,
             evaluation_attempts=list(record.evaluation_attempts),
+            model_candidate=record.model_candidate,
             outcome=outcome,
         )
 
