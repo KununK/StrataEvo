@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,6 +51,22 @@ class FakeEvaluator:
 
 
 class ModelEvolutionTests(unittest.TestCase):
+    def test_cli_import_does_not_require_repository_on_python_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from strataevo.evolution.cli import main; assert callable(main)",
+                ],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_chat_ids_accepts_transformers_batch_encoding_shape(self):
         class FakeTokenizer:
             def apply_chat_template(self, *_args, **_kwargs):
@@ -226,7 +244,7 @@ class ModelEvolutionTests(unittest.TestCase):
                 ]
             )
             config = EvolutionConfig(
-                repo=str(root),
+                repo=str(Path(__file__).resolve().parents[1]),
                 run_name="repair",
                 benchmark="mbpp",
                 repair_attempts=1,
@@ -274,7 +292,12 @@ class ModelEvolutionTests(unittest.TestCase):
             }
             self._write_jsonl(root / "tasks.jsonl", [task])
 
-            tasks, render, _verify = _benchmark_adapter("mbpp", root / "config.json")
+            repo = Path(__file__).resolve().parents[1]
+            tasks, render, _verify = _benchmark_adapter(
+                "mbpp",
+                root / "config.json",
+                repo,
+            )
 
             self.assertEqual(tasks, [task])
             self.assertIn("TESTS =", render(tasks[0]))

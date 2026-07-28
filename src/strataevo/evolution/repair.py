@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from eval.coding_agent import run_agent_task
 from tinyagent import Model, OpenAICompatibleModel
 
 from .types import EvolutionConfig
@@ -63,7 +64,12 @@ def collect_failed_task_repairs(
         _write_collection(destination, [], [], collection)
         return collection
 
-    tasks, render_task, verify = _benchmark_adapter(config.benchmark, source / "config.json")
+    run_agent_task = _load_eval_symbol(config.repo, "eval.coding_agent", "run_agent_task")
+    tasks, render_task, verify = _benchmark_adapter(
+        config.benchmark,
+        source / "config.json",
+        config.repo,
+    )
     tasks_by_id = {str(task["task_id"]): task for task in tasks}
     missing = sorted(failed.keys() - tasks_by_id.keys())
     if missing:
@@ -88,6 +94,7 @@ def collect_failed_task_repairs(
                     attempt,
                     destination,
                     repair_model,
+                    run_agent_task,
                     render_task,
                     verify,
                     config,
@@ -126,6 +133,7 @@ def _repair_once(
     attempt: int,
     output_dir: Path,
     model: Model,
+    run_agent_task: Callable[..., tuple[dict[str, Any], dict[str, Any]]],
     render_task: Callable[[dict[str, Any]], str],
     verify: Callable[[dict[str, Any], str, float], dict[str, Any]],
     config: EvolutionConfig,
@@ -169,6 +177,7 @@ def _repair_once(
 def _benchmark_adapter(
     benchmark: str,
     config_path: Path,
+    repo: str | Path,
 ) -> tuple[
     list[dict[str, Any]],
     Callable[[dict[str, Any]], str],
@@ -179,8 +188,12 @@ def _benchmark_adapter(
     tasks_path = config_path.parent / "tasks.jsonl"
     saved_tasks = _read_jsonl(tasks_path) if tasks_path.is_file() else None
     if benchmark == "humaneval":
-        from eval.humaneval.execution import evaluate_source
-        from eval.humaneval.run import load_tasks
+        evaluate_source = _load_eval_symbol(
+            repo,
+            "eval.humaneval.execution",
+            "evaluate_source",
+        )
+        load_tasks = _load_eval_symbol(repo, "eval.humaneval.run", "load_tasks")
 
         return (
             saved_tasks if saved_tasks is not None else load_tasks(args),
@@ -188,15 +201,30 @@ def _benchmark_adapter(
             lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
         )
     if benchmark == "mbpp":
-        from eval.mbpp.execution import evaluate_source
-        from eval.mbpp.run import load_tasks, render_task_file
+        evaluate_source = _load_eval_symbol(repo, "eval.mbpp.execution", "evaluate_source")
+        run_module = _load_eval_module(repo, "eval.mbpp.run")
 
         return (
-            saved_tasks if saved_tasks is not None else load_tasks(args),
-            render_task_file,
+            saved_tasks if saved_tasks is not None else run_module.load_tasks(args),
+            run_module.render_task_file,
             lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
         )
     raise ValueError(f"repair collection does not support benchmark: {benchmark}")
+
+
+def _load_eval_module(repo: str | Path, module: str) -> Any:
+    root = Path(repo).resolve()
+    if not (root / "eval" / "__init__.py").is_file():
+        raise FileNotFoundError(f"benchmark package not found under repository: {root / 'eval'}")
+    root_text = str(root)
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+    importlib.invalidate_caches()
+    return importlib.import_module(module)
+
+
+def _load_eval_symbol(repo: str | Path, module: str, name: str) -> Any:
+    return getattr(_load_eval_module(repo, module), name)
 
 
 def _write_collection(
