@@ -509,6 +509,8 @@ class EvolutionTests(unittest.TestCase):
             self.assertTrue(memory[0]["patch_path"].endswith("changes.patch"))
             self.assertIn("VERSION = 1", memory[0]["patch_excerpt"])
             self.assertTrue(memory[0]["outcome_observations"][0]["satisfied"])
+            self.assertEqual(memory[0]["outcome"]["status"], "supported")
+            self.assertAlmostEqual(memory[0]["outcome"]["score_delta"], 0.1)
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
             commit_subject = self._git_output(root, "log", "-1", "--pretty=%s").strip()
             self.assertEqual(commit_subject, "evolve: generation 1 pass@1 0.600000")

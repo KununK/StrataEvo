@@ -7,6 +7,8 @@ from strataevo.evolution.memory import (
     EvolutionMemory,
     EvolutionMemoryEntry,
     MemoryDiagnosis,
+    MemoryOutcome,
+    _task_transitions,
     memory_context,
 )
 
@@ -63,6 +65,67 @@ class EvolutionMemoryTests(unittest.TestCase):
         context = memory_context(entries, max_chars=newest_size)
 
         self.assertEqual([item["generation"] for item in context], [3])
+
+    def test_context_exposes_problem_action_and_outcome(self):
+        entry = self._entry(1, "tools", "rejected")
+        entry.outcome = MemoryOutcome(
+            status="regressed",
+            score_delta=-0.1,
+            fixed_tasks=["task/1"],
+            regressed_tasks=["task/2"],
+            remaining_failures=[f"task/{number}" for number in range(20)],
+            summary="The intervention regressed.",
+            next_step="Revise the hypothesis.",
+        )
+
+        context = entry.to_context_dict()
+
+        self.assertEqual(context["selected_diagnosis"]["problem"], "test problem")
+        self.assertEqual(context["action"]["primary_layer"], "tools")
+        self.assertEqual(context["outcome"]["status"], "regressed")
+        self.assertEqual(context["outcome"]["remaining_failures"]["count"], 20)
+        self.assertEqual(len(context["outcome"]["remaining_failures"]["examples"]), 12)
+        self.assertNotIn("agent_output", context)
+
+    def test_old_entry_derives_outcome_summary(self):
+        data = self._entry(1, "context", "rejected").to_dict()
+        data.pop("outcome")
+        data["parent_task_score"] = 0.6
+        data["candidate_task_score"] = 0.5
+
+        loaded = EvolutionMemoryEntry.from_dict(data)
+
+        self.assertEqual(loaded.outcome.status, "regressed")
+        self.assertAlmostEqual(loaded.outcome.score_delta or 0.0, -0.1)
+
+    def test_task_transitions_are_read_from_generic_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "parent"
+            candidate = root / "candidate"
+            parent.mkdir()
+            candidate.mkdir()
+            (parent / "results.jsonl").write_text(
+                '{"task_id":"a","passed":false}\n'
+                '{"task_id":"b","passed":true}\n'
+                '{"task_id":"c","passed":false}\n',
+                encoding="utf-8",
+            )
+            (candidate / "results.jsonl").write_text(
+                '{"task_id":"a","passed":true}\n'
+                '{"task_id":"b","passed":false}\n'
+                '{"task_id":"c","passed":false}\n',
+                encoding="utf-8",
+            )
+
+            transitions = _task_transitions(
+                {"output_dir": str(parent)},
+                {"output_dir": str(candidate)},
+            )
+
+            self.assertEqual(transitions["fixed_tasks"], ["a"])
+            self.assertEqual(transitions["regressed_tasks"], ["b"])
+            self.assertEqual(transitions["remaining_failures"], ["b", "c"])
 
     @staticmethod
     def _entry(
