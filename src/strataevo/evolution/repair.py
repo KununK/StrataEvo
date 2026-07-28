@@ -1,0 +1,237 @@
+"""Collect verifier-passing repairs for failed coding tasks."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from eval.coding_agent import run_agent_task
+from tinyagent import Model, OpenAICompatibleModel
+
+from .types import EvolutionConfig
+
+REPAIR_SYSTEM_PROMPT = """You are repairing a failed coding-agent attempt.
+Work only in the provided workspace. Read task.py, failure.txt, and previous_solution.py.
+Identify the concrete cause reported by the verifier, then create a complete corrected solution.py.
+Use the previous solution only as evidence; replace it when its approach is wrong. Run at most one
+concise local check, then stop. The final answer must exist in solution.py."""
+
+REPAIR_USER_PROMPT = (
+    "Repair the failed solution using the task, previous attempt, and verifier feedback. "
+    "Create solution.py, run at most one concise check, then return."
+)
+
+
+@dataclass(slots=True)
+class RepairCollection:
+    failed_tasks: list[str]
+    repaired_tasks: list[str]
+    still_failed_tasks: list[str]
+    attempts: int
+    successful_trajectories: int
+    output_dir: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def collect_failed_task_repairs(
+    config: EvolutionConfig,
+    evaluation_dir: str | Path,
+    output_dir: str | Path,
+    *,
+    model_name: str,
+    model: Model | None = None,
+) -> RepairCollection:
+    """Retry every failed task and retain attempts accepted by its benchmark verifier."""
+    source = Path(evaluation_dir)
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    results = _read_jsonl(source / "results.jsonl")
+    failed = {
+        str(row["task_id"]): row
+        for row in results
+        if not row.get("passed", row.get("status") == "pass")
+    }
+    if not failed:
+        collection = RepairCollection([], [], [], 0, 0, str(destination))
+        _write_collection(destination, [], [], collection)
+        return collection
+
+    tasks, render_task, verify = _benchmark_adapter(config.benchmark, source / "config.json")
+    tasks_by_id = {str(task["task_id"]): task for task in tasks}
+    missing = sorted(failed.keys() - tasks_by_id.keys())
+    if missing:
+        raise ValueError(f"failed tasks are absent from benchmark data: {missing}")
+    repair_model = model or OpenAICompatibleModel(
+        model=model_name,
+        base_url=config.base_url,
+        temperature=config.repair_temperature,
+        timeout=300.0,
+    )
+
+    generations: list[dict[str, Any]] = []
+    repair_results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=config.eval_workers) as executor:
+        futures = {}
+        for task_id, failure in failed.items():
+            for attempt in range(1, config.repair_attempts + 1):
+                future = executor.submit(
+                    _repair_once,
+                    tasks_by_id[task_id],
+                    failure,
+                    attempt,
+                    destination,
+                    repair_model,
+                    render_task,
+                    verify,
+                    config,
+                )
+                futures[future] = (task_id, attempt)
+        for future in as_completed(futures):
+            generation, result = future.result()
+            generations.append(generation)
+            repair_results.append(result)
+
+    generations.sort(key=lambda row: (str(row["task_id"]), int(row["repair_attempt"])))
+    repair_results.sort(key=lambda row: (str(row["task_id"]), int(row["repair_attempt"])))
+    repaired = sorted(
+        {
+            str(row["task_id"])
+            for row in repair_results
+            if row.get("passed", row.get("status") == "pass")
+        }
+    )
+    still_failed = sorted(failed.keys() - set(repaired))
+    collection = RepairCollection(
+        failed_tasks=sorted(failed),
+        repaired_tasks=repaired,
+        still_failed_tasks=still_failed,
+        attempts=len(repair_results),
+        successful_trajectories=sum(bool(row.get("passed")) for row in repair_results),
+        output_dir=str(destination),
+    )
+    _write_collection(destination, generations, repair_results, collection)
+    return collection
+
+
+def _repair_once(
+    task: dict[str, Any],
+    failure: dict[str, Any],
+    attempt: int,
+    output_dir: Path,
+    model: Model,
+    render_task: Callable[[dict[str, Any]], str],
+    verify: Callable[[dict[str, Any], str, float], dict[str, Any]],
+    config: EvolutionConfig,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    task_id = str(task["task_id"])
+    previous_path = failure.get("candidate_path")
+    previous = ""
+    if isinstance(previous_path, str) and Path(previous_path).is_file():
+        previous = Path(previous_path).read_text(encoding="utf-8")
+    feedback = "\n".join(
+        [
+            f"status: {failure.get('status', 'unknown')}",
+            str(failure.get("stderr", "")),
+            str(failure.get("stdout", "")),
+        ]
+    )[:12_000]
+    candidate = output_dir / "candidates" / f"{_safe_name(task_id)}-{attempt:02d}.py"
+    session_dir = output_dir / "sessions" / f"attempt-{attempt:02d}"
+    generation, result = run_agent_task(
+        task,
+        model,
+        candidate,
+        task_source=render_task(task),
+        evaluate=lambda source, timeout: verify(task, source, timeout),
+        benchmark=f"{config.benchmark}-repair",
+        session_dir=session_dir,
+        max_steps=config.benchmark_max_steps,
+        test_timeout=config.test_timeout,
+        system_prompt=REPAIR_SYSTEM_PROMPT,
+        user_prompt=REPAIR_USER_PROMPT,
+        extra_files={
+            "previous_solution.py": previous or "# No previous solution was produced.\n",
+            "failure.txt": feedback,
+        },
+    )
+    generation["repair_attempt"] = attempt
+    result["repair_attempt"] = attempt
+    return generation, result
+
+
+def _benchmark_adapter(
+    benchmark: str,
+    config_path: Path,
+) -> tuple[
+    list[dict[str, Any]],
+    Callable[[dict[str, Any]], str],
+    Callable[[dict[str, Any], str, float], dict[str, Any]],
+]:
+    values = json.loads(config_path.read_text(encoding="utf-8"))
+    args = argparse.Namespace(**values)
+    tasks_path = config_path.parent / "tasks.jsonl"
+    saved_tasks = _read_jsonl(tasks_path) if tasks_path.is_file() else None
+    if benchmark == "humaneval":
+        from eval.humaneval.execution import evaluate_source
+        from eval.humaneval.run import load_tasks
+
+        return (
+            saved_tasks if saved_tasks is not None else load_tasks(args),
+            lambda task: str(task["prompt"]),
+            lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
+        )
+    if benchmark == "mbpp":
+        from eval.mbpp.execution import evaluate_source
+        from eval.mbpp.run import load_tasks, render_task_file
+
+        return (
+            saved_tasks if saved_tasks is not None else load_tasks(args),
+            render_task_file,
+            lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
+        )
+    raise ValueError(f"repair collection does not support benchmark: {benchmark}")
+
+
+def _write_collection(
+    output_dir: Path,
+    generations: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    collection: RepairCollection,
+) -> None:
+    _write_jsonl(output_dir / "generations.jsonl", generations)
+    _write_jsonl(output_dir / "results.jsonl", results)
+    (output_dir / "summary.json").write_text(
+        json.dumps(collection.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _safe_name(task_id: str) -> str:
+    return (
+        "".join(character if character.isalnum() else "_" for character in task_id)
+        or "task"
+    )

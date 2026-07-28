@@ -63,6 +63,30 @@ def train(config: dict[str, Any]) -> None:
         Path(config["data_path"]),
         int(config["max_length"]),
     )
+    trainable_parameters = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
+    total_parameters = sum(parameter.numel() for parameter in model.parameters())
+    print(
+        json.dumps(
+            {
+                "event": "training_start",
+                "device": torch.cuda.get_device_name(0),
+                "examples": len(examples),
+                "epochs": int(config["epochs"]),
+                "steps_per_epoch": len(examples),
+                "total_steps": len(examples) * int(config["epochs"]),
+                "max_length": int(config["max_length"]),
+                "learning_rate": float(config["learning_rate"]),
+                "lora_rank": int(config["lora_rank"]),
+                "lora_targets": list(LORA_TARGET_MODULES),
+                "trainable_parameters": trainable_parameters,
+                "total_parameters": total_parameters,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
     loader = DataLoader(
         examples,
         batch_size=1,
@@ -74,24 +98,37 @@ def train(config: dict[str, Any]) -> None:
         lr=float(config["learning_rate"]),
     )
     model.train()
-    iterator = iter(loader)
     losses = []
-    for _ in range(int(config["max_steps"])):
-        try:
-            batch = next(iterator)
-        except StopIteration:
-            iterator = iter(loader)
-            batch = next(iterator)
-        batch = {name: value.to(model.device) for name, value in batch.items()}
-        loss = model(**batch).loss
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            (parameter for parameter in model.parameters() if parameter.requires_grad),
-            1.0,
-        )
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        losses.append(float(loss.detach()))
+    epochs = int(config["epochs"])
+    total_steps = len(loader) * epochs
+    step = 0
+    for epoch in range(1, epochs + 1):
+        for batch in loader:
+            step += 1
+            batch = {name: value.to(model.device) for name, value in batch.items()}
+            loss = model(**batch).loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                (parameter for parameter in model.parameters() if parameter.requires_grad),
+                1.0,
+            )
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            value = float(loss.detach())
+            losses.append(value)
+            print(
+                json.dumps(
+                    {
+                        "event": "training_step",
+                        "epoch": epoch,
+                        "epochs": epochs,
+                        "step": step,
+                        "total_steps": total_steps,
+                        "loss": value,
+                    }
+                ),
+                flush=True,
+            )
     output_dir = Path(config["output_dir"])
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
@@ -99,6 +136,7 @@ def train(config: dict[str, Any]) -> None:
         json.dumps(
             {
                 "steps": len(losses),
+                "epochs": epochs,
                 "examples": len(examples),
                 "mean_loss": sum(losses) / len(losses),
                 "final_loss": losses[-1],
@@ -107,6 +145,19 @@ def train(config: dict[str, Any]) -> None:
         )
         + "\n",
         encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {
+                "event": "training_complete",
+                "steps": len(losses),
+                "epochs": epochs,
+                "mean_loss": sum(losses) / len(losses),
+                "final_loss": losses[-1],
+                "output_dir": str(output_dir),
+            }
+        ),
+        flush=True,
     )
 
 

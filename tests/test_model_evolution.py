@@ -5,11 +5,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from strataevo.evolution.model_evolution import (
-    collect_verified_trajectories,
+    build_training_dataset,
     evolve_model,
+    task_changes,
+)
+from strataevo.evolution.repair import (
+    RepairCollection,
+    _benchmark_adapter,
+    collect_failed_task_repairs,
 )
 from strataevo.evolution.sft import _chat_ids
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
+from tinyagent import Message, ScriptedModel, ToolCall
 
 
 class FakeRuntime:
@@ -52,34 +59,6 @@ class ModelEvolutionTests(unittest.TestCase):
             [1, 2, 3],
         )
 
-    def test_collects_only_verifier_passing_trajectories(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self._write_jsonl(
-                root / "results.jsonl",
-                [
-                    {"task_id": "pass", "passed": True},
-                    {"task_id": "fail", "passed": False},
-                ],
-            )
-            self._write_jsonl(
-                root / "generations.jsonl",
-                [
-                    {"task_id": "pass", "messages": [{"role": "user", "content": "a"}]},
-                    {"task_id": "fail", "messages": [{"role": "user", "content": "b"}]},
-                ],
-            )
-            destination = root / "training.jsonl"
-
-            count = collect_verified_trajectories(root, destination, limit=10)
-
-            rows = [
-                json.loads(line)
-                for line in destination.read_text(encoding="utf-8").splitlines()
-            ]
-            self.assertEqual(count, 1)
-            self.assertEqual(rows[0]["task_id"], "pass")
-
     def test_accepts_confirmed_lora_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -115,7 +94,30 @@ class ModelEvolutionTests(unittest.TestCase):
             evaluator = FakeEvaluator(reports)
             runtime = FakeRuntime()
 
-            with patch("strataevo.evolution.model_evolution._run_training"):
+            repairs = RepairCollection(
+                failed_tasks=["failed"],
+                repaired_tasks=["failed"],
+                still_failed_tasks=[],
+                attempts=1,
+                successful_trajectories=1,
+                output_dir=str(root / "repairs"),
+            )
+            with (
+                patch(
+                    "strataevo.evolution.model_evolution.collect_failed_task_repairs",
+                    return_value=repairs,
+                ),
+                patch(
+                    "strataevo.evolution.model_evolution.build_training_dataset",
+                    return_value={
+                        "examples": 2,
+                        "repair_examples": 1,
+                        "replay_examples": 1,
+                        "trained_repair_tasks": ["failed"],
+                    },
+                ),
+                patch("strataevo.evolution.model_evolution._run_training"),
+            ):
                 result = evolve_model(
                     config,
                     1,
@@ -132,10 +134,180 @@ class ModelEvolutionTests(unittest.TestCase):
 
             self.assertEqual(result.decision, "accepted")
             self.assertEqual(result.candidate_report.task_score, 0.7)
-            self.assertEqual(result.candidate["training_examples"], 1)
+            self.assertEqual(result.candidate["training_examples"], 2)
+            self.assertEqual(
+                result.candidate["repair_collection"]["repaired_tasks"],
+                ["failed"],
+            )
             self.assertEqual(evaluator.models[-1], result.candidate["name"])
             self.assertEqual(runtime.events[-1][0], "activate")
             self.assertEqual(runtime.events[0], ("deactivate", "parent-adapter"))
+            train_config = json.loads(
+                (
+                    root / "generation-0001/model/train_config.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(train_config["epochs"], 1)
+            self.assertNotIn("max_steps", train_config)
+
+    def test_training_dataset_prioritizes_repairs_then_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "parent"
+            repairs_dir = root / "repairs"
+            parent.mkdir()
+            repairs_dir.mkdir()
+            self._write_jsonl(
+                parent / "results.jsonl",
+                [{"task_id": "passed", "passed": True}],
+            )
+            self._write_jsonl(
+                parent / "generations.jsonl",
+                [{"task_id": "passed", "messages": [{"role": "assistant", "content": "old"}]}],
+            )
+            self._write_jsonl(
+                repairs_dir / "results.jsonl",
+                [
+                    {"task_id": "failed", "repair_attempt": 1, "passed": True},
+                    {"task_id": "failed", "repair_attempt": 2, "passed": True},
+                ],
+            )
+            self._write_jsonl(
+                repairs_dir / "generations.jsonl",
+                [
+                    {
+                        "task_id": "failed",
+                        "repair_attempt": 1,
+                        "messages": [{"role": "assistant", "content": "fixed"}],
+                    },
+                    {
+                        "task_id": "failed",
+                        "repair_attempt": 2,
+                        "messages": [{"role": "assistant", "content": "duplicate"}],
+                    },
+                ],
+            )
+            collection = RepairCollection(
+                ["failed"], ["failed"], [], 2, 2, str(repairs_dir)
+            )
+            destination = root / "training.jsonl"
+
+            summary = build_training_dataset(parent, collection, destination, limit=2)
+
+            rows = [
+                json.loads(line)
+                for line in destination.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([row["source"] for row in rows], ["repair", "replay"])
+            self.assertEqual(summary["trained_repair_tasks"], ["failed"])
+
+    def test_repair_collector_runs_failed_task_through_verifier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evaluation = root / "evaluation"
+            evaluation.mkdir()
+            self._write_jsonl(
+                evaluation / "results.jsonl",
+                [{"task_id": "task", "passed": False, "status": "assertion_error"}],
+            )
+            model = ScriptedModel(
+                [
+                    Message(
+                        "assistant",
+                        tool_calls=[
+                            ToolCall(
+                                "write",
+                                "write_file",
+                                {"path": "solution.py", "content": "def answer(): return 1\n"},
+                            )
+                        ],
+                    ),
+                    Message("assistant", "repaired"),
+                ]
+            )
+            config = EvolutionConfig(
+                repo=str(root),
+                run_name="repair",
+                benchmark="mbpp",
+                repair_attempts=1,
+                eval_workers=1,
+            )
+            adapter = (
+                [{"task_id": "task", "prompt": "repair", "entry_point": "answer"}],
+                lambda _task: "def answer(): ...\n",
+                lambda _task, source, _timeout: {
+                    "passed": "return 1" in source,
+                    "status": "pass",
+                },
+            )
+
+            with patch(
+                "strataevo.evolution.repair._benchmark_adapter",
+                return_value=adapter,
+            ):
+                collection = collect_failed_task_repairs(
+                    config,
+                    evaluation,
+                    root / "repairs",
+                    model_name="test",
+                    model=model,
+                )
+
+            self.assertEqual(collection.repaired_tasks, ["task"])
+            self.assertEqual(collection.still_failed_tasks, [])
+            self.assertEqual(collection.successful_trajectories, 1)
+
+    def test_repair_adapter_reuses_saved_task_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.json").write_text(
+                json.dumps({"dataset": "unused"}),
+                encoding="utf-8",
+            )
+            task = {
+                "task_id": "11",
+                "prompt": "add",
+                "entry_point": "add",
+                "test_list": ["assert add(1, 2) == 3"],
+                "test_setup": "",
+                "test_imports": "",
+            }
+            self._write_jsonl(root / "tasks.jsonl", [task])
+
+            tasks, render, _verify = _benchmark_adapter("mbpp", root / "config.json")
+
+            self.assertEqual(tasks, [task])
+            self.assertIn("TESTS =", render(tasks[0]))
+
+    def test_task_changes_records_fixed_regressed_and_still_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "parent"
+            candidate = root / "candidate"
+            parent.mkdir()
+            candidate.mkdir()
+            self._write_jsonl(
+                parent / "results.jsonl",
+                [
+                    {"task_id": "fixed", "passed": False},
+                    {"task_id": "regressed", "passed": True},
+                    {"task_id": "failed", "passed": False},
+                ],
+            )
+            self._write_jsonl(
+                candidate / "results.jsonl",
+                [
+                    {"task_id": "fixed", "passed": True},
+                    {"task_id": "regressed", "passed": False},
+                    {"task_id": "failed", "passed": False},
+                ],
+            )
+
+            changes = task_changes(parent, candidate)
+
+            self.assertEqual(changes["fixed_tasks"], ["fixed"])
+            self.assertEqual(changes["regressed_tasks"], ["regressed"])
+            self.assertEqual(changes["still_failed_tasks"], ["failed"])
 
     @staticmethod
     def _write_jsonl(path, rows):

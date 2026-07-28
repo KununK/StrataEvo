@@ -105,6 +105,7 @@ def run_agent_task(
     test_timeout: float = 10.0,
     system_prompt: str = SYSTEM_PROMPT,
     user_prompt: str = USER_PROMPT,
+    extra_files: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run one isolated Agent task, preserve its candidate, and evaluate it."""
     started = time.perf_counter()
@@ -113,6 +114,10 @@ def run_agent_task(
         task_path = workspace / "task.py"
         task_path.write_text(task_source, encoding="utf-8")
         task_path.chmod(0o444)
+        for name, content in (extra_files or {}).items():
+            path = workspace / name
+            path.write_text(content, encoding="utf-8")
+            path.chmod(0o444)
         session_id = safe_name(str(task["task_id"]))
         session_store = SessionStore(session_dir) if session_dir else None
         if session_dir:
@@ -209,6 +214,11 @@ def run_benchmark(
     generations_path = output_dir / "generations.jsonl"
     results_path = output_dir / "results.jsonl"
     summary_path = output_dir / "summary.json"
+    tasks_path = output_dir / "tasks.jsonl"
+    tasks_path.write_text(
+        "".join(json.dumps(task, ensure_ascii=False) + "\n" for task in tasks),
+        encoding="utf-8",
+    )
 
     selected_task_ids = {str(task["task_id"]) for task in tasks}
     existing = [row for row in read_jsonl(results_path) if row.get("task_id") in selected_task_ids]

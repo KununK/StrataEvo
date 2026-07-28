@@ -28,11 +28,13 @@ class EvolutionConfig:
     model_evolution: bool = False
     force_layer: str | None = None
     sft_device: str = "1"
-    sft_max_steps: int = 20
+    sft_epochs: int = 1
     sft_max_samples: int = 32
     sft_max_length: int = 4096
     sft_lora_rank: int = 8
     sft_learning_rate: float = 1e-4
+    repair_attempts: int = 2
+    repair_temperature: float = 0.2
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -46,6 +48,7 @@ class EvolutionConfig:
             "token_penalty",
             "min_utility_delta",
             "max_score_drop",
+            "sft_max_steps",
         ):
             values.pop(legacy, None)
         return cls(**values)

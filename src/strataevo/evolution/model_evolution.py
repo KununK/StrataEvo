@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .evaluation import BenchmarkEvaluator
+from .repair import RepairCollection, collect_failed_task_repairs
 from .types import EvaluationReport, EvolutionConfig
 
 
@@ -73,33 +74,64 @@ class VLLMAdapterRuntime:
             raise RuntimeError(f"vLLM adapter request failed: {error}") from error
 
 
-def collect_verified_trajectories(
+def build_training_dataset(
     evaluation_dir: str | Path,
+    repairs: RepairCollection,
     destination: str | Path,
     *,
     limit: int,
-) -> int:
-    """Write successful benchmark conversations as SFT examples."""
-    source = Path(evaluation_dir)
-    passed = {
+) -> dict[str, Any]:
+    """Combine one successful repair per failed task with successful replay traces."""
+    parent = Path(evaluation_dir)
+    repair_dir = Path(repairs.output_dir)
+    repair_results = {
+        (str(row["task_id"]), int(row["repair_attempt"])): bool(
+            row.get("passed", row.get("status") == "pass")
+        )
+        for row in _read_jsonl(repair_dir / "results.jsonl")
+    }
+    repaired_examples: list[dict[str, Any]] = []
+    selected_repairs: set[str] = set()
+    for row in _read_jsonl(repair_dir / "generations.jsonl"):
+        task_id = str(row["task_id"])
+        key = (task_id, int(row["repair_attempt"]))
+        if (
+            task_id in selected_repairs
+            or not repair_results.get(key)
+            or not row.get("messages")
+        ):
+            continue
+        repaired_examples.append(
+            {"task_id": row["task_id"], "source": "repair", "messages": row["messages"]}
+        )
+        selected_repairs.add(task_id)
+
+    parent_passed = {
         str(row["task_id"])
-        for row in _read_jsonl(source / "results.jsonl")
+        for row in _read_jsonl(parent / "results.jsonl")
         if row.get("passed", row.get("status") == "pass")
     }
-    examples = []
-    for row in _read_jsonl(source / "generations.jsonl"):
-        if str(row.get("task_id")) not in passed or not row.get("messages"):
-            continue
-        examples.append({"task_id": row["task_id"], "messages": row["messages"]})
-        if len(examples) >= limit:
-            break
+    replay_examples = [
+        {"task_id": row["task_id"], "source": "replay", "messages": row["messages"]}
+        for row in _read_jsonl(parent / "generations.jsonl")
+        if str(row.get("task_id")) in parent_passed and row.get("messages")
+    ]
+    examples = [*repaired_examples, *replay_examples][:limit]
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in examples),
         encoding="utf-8",
     )
-    return len(examples)
+    trained_repairs = [
+        str(item["task_id"]) for item in examples if item["source"] == "repair"
+    ]
+    return {
+        "examples": len(examples),
+        "repair_examples": len(trained_repairs),
+        "replay_examples": sum(item["source"] == "replay" for item in examples),
+        "trained_repair_tasks": trained_repairs,
+    }
 
 
 def evolve_model(
@@ -117,11 +149,25 @@ def evolve_model(
     runtime = runtime or VLLMAdapterRuntime(config.base_url)
     model_dir = generation_dir / "model"
     data_path = model_dir / "verified_trajectories.jsonl"
-    sample_count = collect_verified_trajectories(
+    print("[evolution] collecting verifier-guided repairs for failed tasks", flush=True)
+    repairs = collect_failed_task_repairs(
+        config,
         parent_report.output_dir,
+        model_dir / "repairs",
+        model_name=parent_model,
+    )
+    training_data = build_training_dataset(
+        parent_report.output_dir,
+        repairs,
         data_path,
         limit=config.sft_max_samples,
     )
+    print(
+        f"[evolution] repairs={len(repairs.repaired_tasks)}/{len(repairs.failed_tasks)} "
+        f"training_examples={training_data['examples']}",
+        flush=True,
+    )
+    sample_count = int(training_data["examples"])
     candidate_name = f"{config.run_name}-generation-{generation:04d}"
     adapter_path = model_dir / "adapter"
     candidate = {
@@ -135,12 +181,14 @@ def evolve_model(
         ),
         "training_examples": sample_count,
         "training_data": str(data_path),
+        "repair_collection": repairs.to_dict(),
+        "training_dataset": training_data,
     }
-    if sample_count == 0:
+    if not training_data["repair_examples"]:
         return ModelEvolutionResult(
             "rejected",
             "model_training_skipped",
-            "no verifier-passing trajectories were available for SFT",
+            "no failed task produced a verifier-passing repair trajectory",
             None,
             None,
             candidate,
@@ -151,7 +199,7 @@ def evolve_model(
         "parent_adapter_path": parent_adapter["path"] if parent_adapter else None,
         "data_path": str(data_path),
         "output_dir": str(adapter_path),
-        "max_steps": config.sft_max_steps,
+        "epochs": config.sft_epochs,
         "max_length": config.sft_max_length,
         "lora_rank": config.sft_lora_rank,
         "learning_rate": config.sft_learning_rate,
@@ -175,6 +223,10 @@ def evolve_model(
             parent_adapter,
         )
         candidate_report = evaluator.evaluate(model_dir / "screening" / "evaluation")
+        candidate["screening_task_changes"] = task_changes(
+            parent_report.output_dir,
+            candidate_report.output_dir,
+        )
         if candidate_report.task_score <= parent_report.task_score:
             _restore_parent(
                 runtime,
@@ -205,6 +257,10 @@ def evolve_model(
             parent_adapter,
         )
         confirmed = evaluator.evaluate(model_dir / "promotion" / "candidate" / "evaluation")
+        candidate["promotion_task_changes"] = task_changes(
+            fresh_parent.output_dir,
+            confirmed.output_dir,
+        )
     except BaseException:
         _restore_parent(
             runtime,
@@ -339,3 +395,22 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(item, dict):
                 rows.append(item)
     return rows
+
+
+def task_changes(parent_dir: str | Path, candidate_dir: str | Path) -> dict[str, list[str]]:
+    parent = {
+        str(row["task_id"]): bool(row.get("passed", row.get("status") == "pass"))
+        for row in _read_jsonl(Path(parent_dir) / "results.jsonl")
+    }
+    candidate = {
+        str(row["task_id"]): bool(row.get("passed", row.get("status") == "pass"))
+        for row in _read_jsonl(Path(candidate_dir) / "results.jsonl")
+    }
+    shared = sorted(parent.keys() & candidate.keys())
+    return {
+        "fixed_tasks": [task for task in shared if not parent[task] and candidate[task]],
+        "regressed_tasks": [task for task in shared if parent[task] and not candidate[task]],
+        "still_failed_tasks": [
+            task for task in shared if not parent[task] and not candidate[task]
+        ],
+    }

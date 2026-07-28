@@ -45,9 +45,10 @@ src/strataevo/evolution/git.py  Git 提交和回滚
 如果不保留这条边界，Agent 就可能通过修改评测器提高报告分数，而不是真正提升自身能力。
 
 Model 层不修改 Git 工作树。显式传入 `--enable-model-evolution` 后，如果 Diagnosis 和
-Plan 选择 `model`，系统会从当前 benchmark 中筛选 verifier 通过的轨迹，在 GPU 1 上训练
-LoRA，并通过 GPU 0 的 vLLM 动态加载候选。该协议在同一批任务上训练和评测，属于测试时
-适应实验，不是 held-out 泛化评测。未选择 `model` 时仍执行原有源码进化。
+Plan 选择 `model`，系统会重新尝试父代失败任务，筛选 verifier 通过的修复轨迹并加入成功
+轨迹 replay，在 GPU 1 上训练 LoRA，再通过 GPU 0 的 vLLM 动态加载候选。该协议在同一批
+任务上训练和评测，属于测试时适应实验，不是 held-out 泛化评测。未选择 `model` 时仍执行
+原有源码进化。
 
 ## Evaluation Contract
 
@@ -111,7 +112,8 @@ strataevo \
 --enable-model-evolution  允许 model 计划执行 verifier-guided LoRA SFT
 --force-layer model       强制选择一个 model 诊断，仅用于链路测试
 --sft-device              LoRA 训练使用的物理 GPU，默认 1
---sft-max-steps           每个模型候选的训练步数，默认 20
+--sft-epochs              LoRA 遍历修复与 replay 训练集的次数，默认 1
+--repair-attempts         每个失败任务的修复尝试数，默认 2
 ```
 
 `--mutator-max-steps` 默认是 `200`，`--mutator-rounds` 和 `--max-eval-attempts` 默认都是
@@ -232,6 +234,10 @@ evolution/runs/<run_name>/
 │   │   ├── verified_trajectories.jsonl
 │   │   ├── train_config.json
 │   │   ├── train.log
+│   │   ├── repairs/
+│   │   │   ├── generations.jsonl
+│   │   │   ├── results.jsonl
+│   │   │   └── summary.json
 │   │   └── adapter/
 │   ├── attempt-0001/
 │   │   ├── attempt.json
@@ -264,6 +270,9 @@ evolution/runs/<run_name>/
 - `attempt-NNNN/attempt.json`：该次验证、评测状态和报告；
 - `promotion/comparison.json`：探索最佳结果、新鲜父代结果和候选确认结果；
 - `record.json`：父代、本代最佳候选、全部 attempts、晋级决定和原因；
+- `model/repairs/`：失败任务的修复轨迹、verifier 结果及修复成功/仍失败任务；
+- `model/adapter/training_metrics.json`：LoRA 的 epochs、steps 和 loss；
+- `*/evaluation/tasks.jsonl`：该次 benchmark 实际选择的完整任务快照，供修复器复用；
 - `attempt-NNNN/validation.log`：Ruff、pytest 和 CLI 检查输出；
 - `attempt-NNNN/evaluation/`：该候选的代码、session 和 benchmark 结果；
 - `attempt-NNNN/evaluation/evidence.json`：该候选的结构化评测证据；

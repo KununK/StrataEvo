@@ -42,11 +42,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--enable-model-evolution", action="store_true")
     parser.add_argument("--force-layer", choices=("model",))
     parser.add_argument("--sft-device", default="1")
-    parser.add_argument("--sft-max-steps", type=int, default=20)
+    parser.add_argument("--sft-epochs", type=int, default=1)
     parser.add_argument("--sft-max-samples", type=int, default=32)
     parser.add_argument("--sft-max-length", type=int, default=4096)
     parser.add_argument("--sft-lora-rank", type=int, default=8)
     parser.add_argument("--sft-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--repair-attempts", type=int, default=2)
+    parser.add_argument("--repair-temperature", type=float, default=0.2)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--worker-config", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -89,11 +91,13 @@ def main(argv: list[str] | None = None) -> int:
             model_evolution=args.enable_model_evolution,
             force_layer=args.force_layer,
             sft_device=args.sft_device,
-            sft_max_steps=args.sft_max_steps,
+            sft_epochs=args.sft_epochs,
             sft_max_samples=args.sft_max_samples,
             sft_max_length=args.sft_max_length,
             sft_lora_rank=args.sft_lora_rank,
             sft_learning_rate=args.sft_learning_rate,
+            repair_attempts=args.repair_attempts,
+            repair_temperature=args.repair_temperature,
         )
         write_json(config_path, config.to_dict())
 
@@ -500,10 +504,11 @@ def _validate_args(args: argparse.Namespace) -> None:
         "max-eval-attempts": args.max_eval_attempts,
         "eval-workers": args.eval_workers,
         "benchmark-max-steps": args.benchmark_max_steps,
-        "sft-max-steps": args.sft_max_steps,
+        "sft-epochs": args.sft_epochs,
         "sft-max-samples": args.sft_max_samples,
         "sft-max-length": args.sft_max_length,
         "sft-lora-rank": args.sft_lora_rank,
+        "repair-attempts": args.repair_attempts,
     }
     for name, value in positive.items():
         if value <= 0:
@@ -512,6 +517,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("eval-offset must be non-negative and eval-limit must be positive")
     if args.sft_learning_rate <= 0:
         raise ValueError("sft-learning-rate must be positive")
+    if not 0.0 <= args.repair_temperature <= 2.0:
+        raise ValueError("repair-temperature must be between 0 and 2")
     if args.force_layer == "model" and not args.enable_model_evolution:
         raise ValueError("--force-layer model requires --enable-model-evolution")
 

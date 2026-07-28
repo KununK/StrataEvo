@@ -98,6 +98,28 @@ class EvolutionMemoryTests(unittest.TestCase):
         self.assertEqual(len(context["outcome"]["remaining_failures"]["examples"]), 12)
         self.assertNotIn("agent_output", context)
 
+    def test_context_preserves_model_repair_and_task_changes(self):
+        entry = self._entry(1, "model", "rejected")
+        entry.model_candidate = {
+            "repair_collection": {
+                "repaired_tasks": ["task/fixed"],
+                "still_failed_tasks": ["task/failed"],
+            },
+            "screening_task_changes": {
+                "fixed_tasks": ["task/fixed"],
+                "regressed_tasks": ["task/regressed"],
+                "still_failed_tasks": ["task/failed"],
+            },
+        }
+
+        candidate = entry.to_context_dict()["action"]["model_candidate"]
+
+        self.assertEqual(candidate["repair_collection"]["repaired_tasks"], ["task/fixed"])
+        self.assertEqual(
+            candidate["screening_task_changes"]["regressed_tasks"],
+            ["task/regressed"],
+        )
+
     def test_old_entry_derives_outcome_summary(self):
         data = self._entry(1, "context", "rejected").to_dict()
         data.pop("outcome")

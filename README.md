@@ -210,9 +210,10 @@ strataevo \
 
 ### Model 层进化
 
-第一版 Model Evolution 使用当前 benchmark 中 verifier 已确认通过的 Agent 轨迹进行
-test-time LoRA SFT。训练任务与随后评测的任务不分离，因此这是测试集参与的适应实验，
-不能报告为 held-out 泛化结果。LoRA 训练默认在物理 GPU 1 运行，vLLM 推理仍在 GPU 0。
+第一版 Model Evolution 会针对当前 benchmark 的失败任务生成修复轨迹，只将通过同一个
+verifier 的修复结果用于 test-time LoRA SFT，并混入父代成功轨迹作为 replay。训练任务与
+随后评测的任务不分离，因此这是测试集参与的适应实验，不能报告为 held-out 泛化结果。
+LoRA 训练默认在物理 GPU 1 运行，vLLM 推理仍在 GPU 0。
 
 `vllm_serve.sh` 已默认启用 LoRA 和运行时 adapter 更新。重启服务后，在演化命令中显式开启：
 
@@ -231,10 +232,12 @@ strataevo \
 ```
 
 `--force-layer model` 用于单独验证模型进化链路；正式自主实验应省略该参数，由 Diagnosis
-与 Plan 选择演化层。默认每次最多取 32 条通过轨迹，进行
-20 step、rank 8 的 LoRA SFT；候选仍需经过筛选和新鲜父子复测。源码候选继续由 Git
+与 Plan 选择演化层。每个失败任务默认生成 2 次修复，训练集优先放入成功修复，再用父代
+成功轨迹填充至最多 32 条。LoRA 默认训练 1 epoch、rank 8；候选仍需经过筛选和新鲜父子
+复测。源码候选继续由 Git
 提交或回滚，模型候选则保存在对应 generation 的 `model/adapter/`，并在 `state.json`
-和 `evolution_memory.jsonl` 中记录其父代和路径。
+和 `evolution_memory.jsonl` 中记录父代、修复成功任务、仍失败任务、评测修复任务及退化
+任务。
 
 ## 工具与安全边界
 

@@ -43,6 +43,8 @@ class EvolutionTests(unittest.TestCase):
         self.assertEqual(args.mutator_rounds, 5)
         self.assertEqual(args.max_eval_attempts, 5)
         self.assertEqual(args.benchmark_max_steps, 12)
+        self.assertEqual(args.sft_epochs, 1)
+        self.assertEqual(args.repair_attempts, 2)
         self.assertIsNone(args.eval_limit)
 
     def test_forced_model_layer_requires_model_evolution(self):
