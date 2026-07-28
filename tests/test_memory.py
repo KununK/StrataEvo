@@ -66,6 +66,17 @@ class EvolutionMemoryTests(unittest.TestCase):
 
         self.assertEqual([item["generation"] for item in context], [3])
 
+    def test_large_failure_trace_does_not_hide_the_memory_entry(self):
+        entry = self._entry(1, "architecture", "rejected")
+        entry.reason = "traceback " * 3000
+        entry.outcome.summary = "validation traceback " * 3000
+
+        context = memory_context([entry], max_chars=12_000)
+
+        self.assertEqual([item["generation"] for item in context], [1])
+        self.assertLessEqual(len(context[0]["reason"]), 500)
+        self.assertLessEqual(len(context[0]["outcome"]["summary"]), 500)
+
     def test_context_exposes_problem_action_and_outcome(self):
         entry = self._entry(1, "tools", "rejected")
         entry.outcome = MemoryOutcome(

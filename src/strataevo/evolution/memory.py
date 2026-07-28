@@ -18,6 +18,7 @@ DEFAULT_MEMORY_CONTEXT_ENTRIES = 8
 PATCH_EXCERPT_CHARS = 3000
 PATCH_CONTEXT_CHARS = 1200
 TASK_CONTEXT_LIMIT = 12
+TEXT_CONTEXT_CHARS = 500
 EVOLUTION_LAYERS = {"model", "context", "tools", "architecture"}
 OUTCOME_STATUSES = {"supported", "regressed", "no_measured_gain", "not_evaluated"}
 
@@ -85,8 +86,8 @@ class MemoryOutcome:
             "fixed_tasks": _task_context(self.fixed_tasks),
             "regressed_tasks": _task_context(self.regressed_tasks),
             "remaining_failures": _task_context(self.remaining_failures),
-            "summary": self.summary,
-            "next_step": self.next_step,
+            "summary": self.summary[:TEXT_CONTEXT_CHARS],
+            "next_step": self.next_step[:TEXT_CONTEXT_CHARS],
         }
 
 
@@ -130,7 +131,7 @@ class EvolutionMemoryEntry:
             "generation": self.generation,
             "decision": self.decision,
             "outcome_type": self.outcome_type,
-            "reason": self.reason,
+            "reason": self.reason[:TEXT_CONTEXT_CHARS],
             "selected_diagnosis": asdict(selected) if selected else None,
             "action": {
                 "primary_layer": self.plan.get("primary_layer"),
@@ -345,10 +346,9 @@ def _attempt_context(attempt: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": attempt.get("number"),
         "outcome_type": attempt.get("outcome_type"),
-        "reason": str(attempt.get("reason", ""))[:500],
+        "reason": str(attempt.get("reason", ""))[:250],
         "changed_paths": attempt.get("changed_paths", []),
         "task_score": report.get("task_score") if isinstance(report, dict) else None,
-        "output_dir": report.get("output_dir") if isinstance(report, dict) else None,
     }
 
 
