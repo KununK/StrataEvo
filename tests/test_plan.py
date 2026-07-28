@@ -90,20 +90,17 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertEqual(len(report.attempts), 2)
         self.assertIn("invalid direction", model.requests[1][-1].content)
 
-    def test_plan_must_expect_strict_task_score_improvement(self):
-        invalid = self._plan()
-        invalid["expected_outcomes"][1]["direction"] = "non_decreasing"
-        model = ScriptedModel(
-            [
-                Message("assistant", json.dumps(invalid)),
-                Message("assistant", json.dumps(self._plan())),
-            ]
-        )
+    def test_plan_can_measure_an_intermediate_metric(self):
+        plan = self._plan()
+        plan["expected_outcomes"] = [plan["expected_outcomes"][0]]
+        model = ScriptedModel([Message("assistant", json.dumps(plan))])
 
         report = EvolutionPlanner(model).create_plan(self._diagnosis(), self._parent())
 
-        self.assertEqual(len(report.attempts), 2)
-        self.assertIn("must expect task_score to increase", model.requests[1][-1].content)
+        self.assertEqual(
+            [outcome.metric for outcome in report.plan.expected_outcomes],
+            ["signal:artifact_missing"],
+        )
 
     def test_expected_outcomes_are_compared_with_candidate_metrics(self):
         model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
