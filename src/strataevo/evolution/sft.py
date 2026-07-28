@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+LORA_TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -34,7 +36,7 @@ def train(config: dict[str, Any]) -> None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
         config["base_model"],
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map={"": 0},
         trust_remote_code=True,
     )
@@ -49,15 +51,7 @@ def train(config: dict[str, Any]) -> None:
                 r=rank,
                 lora_alpha=rank * 2,
                 lora_dropout=0.05,
-                target_modules=[
-                    "q_proj",
-                    "k_proj",
-                    "v_proj",
-                    "o_proj",
-                    "gate_proj",
-                    "up_proj",
-                    "down_proj",
-                ],
+                target_modules=list(LORA_TARGET_MODULES),
                 task_type="CAUSAL_LM",
             ),
         )
