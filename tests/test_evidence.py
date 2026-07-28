@@ -35,9 +35,16 @@ class EvidenceCollectorTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(bundle.signal_counts["artifact_created_then_missing"], 1)
+            self.assertEqual(
+                [(event.index, event.name) for event in missing.tool_events],
+                [(1, "write_file"), (2, "run_shell")],
+            )
+            self.assertEqual(missing.tool_events[0].result, "Wrote solution.py")
+            self.assertEqual(missing.tool_events[1].result, "exit_code=0")
             evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))
             self.assertEqual(evidence["cases"][1]["task_id"], "HumanEval/2")
             self.assertNotIn("candidate_deleted", evidence["cases"][1])
+            self.assertNotIn("tool_sequence", evidence["cases"][1])
 
     def test_legacy_delete_signals_are_ignored(self):
         data = {
@@ -67,6 +74,10 @@ class EvidenceCollectorTests(unittest.TestCase):
 
         self.assertFalse(hasattr(case, "artifact_delete_attempted"))
         self.assertNotIn("artifact_deleted", case.signals)
+        self.assertEqual(
+            [(event.name, event.arguments) for event in case.tool_events],
+            [("run_shell", {"command": "rm solution.py"})],
+        )
 
         bundle = EvidenceBundle.from_dict(
             {
@@ -146,15 +157,29 @@ class EvidenceCollectorTests(unittest.TestCase):
                         "role": "assistant",
                         "tool_calls": [
                             {
+                                "id": "write-1",
                                 "name": "write_file",
                                 "arguments": {"path": "solution.py", "content": "pass\n"},
                             },
                             {
+                                "id": "shell-1",
                                 "name": "run_shell",
                                 "arguments": {"command": "rm -f solution.py"},
                             },
                         ],
-                    }
+                    },
+                    {
+                        "role": "tool",
+                        "name": "write_file",
+                        "tool_call_id": "write-1",
+                        "content": "Wrote solution.py",
+                    },
+                    {
+                        "role": "tool",
+                        "name": "run_shell",
+                        "tool_call_id": "shell-1",
+                        "content": "exit_code=0",
+                    },
                 ],
             },
         ]

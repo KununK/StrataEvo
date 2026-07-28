@@ -173,7 +173,7 @@ benchmark -> Evidence -> 四层 Diagnosis -> Evolution Plan
 ```
 
 四层是 Model、Context、Tools 和 Architecture。Evidence 只保存任务结果、候选文件状态、
-工具序列、Shell 命令和 session 路径等可观察事实，不用规则替模型做分层归因。Planner 每代
+有序工具调用及结果和 session 路径等可观察事实，不用规则替模型做分层归因。Planner 每代
 选择一项能够提升 `task_score` 的假设。自修改 Agent 默认共享 200 个 step、5 个 refinement
 round 和 5 次候选 benchmark 配额。
 

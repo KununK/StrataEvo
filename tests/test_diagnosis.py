@@ -3,7 +3,7 @@ import unittest
 from dataclasses import replace
 
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
-from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence
+from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from strataevo.evolution.memory import EvolutionMemoryEntry, MemoryDiagnosis
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 
@@ -71,6 +71,9 @@ class DiagnosisTests(unittest.TestCase):
         request = model.requests[0][1].content
         self.assertIn("HumanEval/25", request)
         self.assertIn("rm -f solution.py", request)
+        self.assertIn('"tool_events"', request)
+        self.assertIn('"result": "exit_code=0"', request)
+        self.assertNotIn('"tool_sequence"', request)
         self.assertIn('"prior_evolution"', request)
         self.assertIn("task score did not improve", request)
         self.assertIn('"passed": false', request)
@@ -201,7 +204,9 @@ class DiagnosisTests(unittest.TestCase):
             replace(
                 bundle.cases[0],
                 task_id=f"HumanEval/{number}",
-                shell_commands=["x" * 20_000],
+                tool_events=[
+                    ToolEvent(number, f"call-{number}", "run_shell", {"command": "x" * 20_000}, "")
+                ],
             )
             for number in range(26, 66)
         )
@@ -229,8 +234,23 @@ class DiagnosisTests(unittest.TestCase):
             candidate_path=None,
             candidate_present=False,
             candidate_created=True,
-            tool_sequence=["read_file", "write_file", "run_shell"],
-            shell_commands=["rm -f solution.py"],
+            tool_events=[
+                ToolEvent(1, "read", "read_file", {"path": "task.py"}, "task"),
+                ToolEvent(
+                    2,
+                    "write",
+                    "write_file",
+                    {"path": "solution.py", "content": "pass\n"},
+                    "Wrote 5 bytes",
+                ),
+                ToolEvent(
+                    3,
+                    "shell",
+                    "run_shell",
+                    {"command": "rm -f solution.py"},
+                    "exit_code=0",
+                ),
+            ],
             error="solution.py was not created",
             generation_path="generations.jsonl",
             session_path="sessions/HumanEval_25.json",

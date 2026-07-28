@@ -11,7 +11,7 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel
 
-from .evidence import EvidenceBundle, TaskEvidence
+from .evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
 from .structured import request_json
@@ -262,8 +262,7 @@ def _compact_case(case: TaskEvidence) -> dict[str, Any]:
         "steps": case.steps,
         "candidate_present": case.candidate_present,
         "candidate_created": case.candidate_created,
-        "tool_sequence": case.tool_sequence[:40],
-        "shell_commands": _text_items_within(case.shell_commands, 6000),
+        "tool_events": _compact_tool_events(case.tool_events, 8000),
         "error": case.error[:1000],
         "signals": case.signals,
         "candidate_path": case.candidate_path,
@@ -295,17 +294,34 @@ def _message_size(payload: dict[str, Any]) -> int:
     )
 
 
-def _text_items_within(items: list[str], limit: int) -> list[str]:
-    selected: list[str] = []
+def _compact_tool_events(events: list[ToolEvent], limit: int) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
     size = 2
-    for item in items:
-        excerpt = item[:limit]
-        item_size = len(json.dumps(excerpt, ensure_ascii=False)) + 1
+    for event in events[:40]:
+        item = {
+            "index": event.index,
+            "name": event.name,
+            "arguments": {
+                key: _compact_value(value) for key, value in event.arguments.items()
+            },
+            "result": event.result[:200] if event.result is not None else None,
+        }
+        item_size = len(json.dumps(item, ensure_ascii=False)) + 1
         if size + item_size > limit:
             break
-        selected.append(excerpt)
+        selected.append(item)
         size += item_size
     return selected
+
+
+def _compact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value[:200]
+    if isinstance(value, list):
+        return [_compact_value(item) for item in value[:10]]
+    if isinstance(value, dict):
+        return {str(key): _compact_value(item) for key, item in list(value.items())[:10]}
+    return value
 
 
 def _parse_diagnoses(data: dict[str, Any], known_tasks: set[str]) -> list[Diagnosis]:
