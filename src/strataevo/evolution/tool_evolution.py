@@ -1,13 +1,13 @@
-"""Versioned prompt evolution evaluated without rewriting source code."""
+"""Versioned evolution of tool descriptions exposed to the model."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tinyagent import Message, Model, OpenAICompatibleModel
+from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport
@@ -19,34 +19,38 @@ from .profile_evolution import evaluate_profile
 from .structured import request_json
 from .types import EvaluationReport, EvolutionConfig
 
-MAX_CONTEXT_CHARS = 12_000
+MAX_TOOL_PROFILE_CHARS = 8_000
 
 
 @dataclass(frozen=True, slots=True)
-class ContextProfile:
-    system_prompt_addendum: str = ""
-    task_prompt_addendum: str = ""
+class ToolProfile:
+    description_addenda: dict[str, str]
 
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, dict[str, str]]:
+        return {"description_addenda": dict(self.description_addenda)}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> ContextProfile:
-        values = data or {}
-        system = values.get("system_prompt_addendum", "")
-        task = values.get("task_prompt_addendum", "")
-        if not isinstance(system, str) or not isinstance(task, str):
-            raise ValueError("context addenda must be strings")
-        profile = cls(system.strip(), task.strip())
-        if len(profile.system_prompt_addendum) + len(profile.task_prompt_addendum) > (
-            MAX_CONTEXT_CHARS
+    def from_dict(
+        cls,
+        data: dict[str, Any] | None,
+        known_tools: set[str],
+    ) -> ToolProfile:
+        values = (data or {}).get("description_addenda", {})
+        if not isinstance(values, dict) or not all(
+            isinstance(name, str) and isinstance(text, str) for name, text in values.items()
         ):
-            raise ValueError(f"context profile exceeds {MAX_CONTEXT_CHARS} characters")
-        return profile
+            raise ValueError("tool description_addenda must be an object of strings")
+        addenda = {name: text.strip() for name, text in values.items() if text.strip()}
+        unknown = set(addenda) - known_tools
+        if unknown:
+            raise ValueError(f"unknown tools: {', '.join(sorted(unknown))}")
+        if sum(map(len, addenda.values())) > MAX_TOOL_PROFILE_CHARS:
+            raise ValueError(f"tool profile exceeds {MAX_TOOL_PROFILE_CHARS} characters")
+        return cls(addenda)
 
 
 @dataclass(slots=True)
-class ContextEvolutionResult:
+class ToolEvolutionResult:
     decision: str
     outcome_type: str
     reason: str
@@ -57,47 +61,50 @@ class ContextEvolutionResult:
     output_tokens: int
 
 
-class ContextEvolver:
+class ToolEvolver:
     def __init__(self, model: Model, *, repair_retries: int = 1) -> None:
         self.model = model
         self.repair_retries = repair_retries
 
     def create_candidate(
         self,
-        parent: ContextProfile,
+        parent: ToolProfile,
+        tool_descriptions: dict[str, str],
         diagnosis: DiagnosisReport,
         plan: EvolutionPlanReport,
         history: list[EvolutionMemoryEntry],
         contract: EvaluationContract,
-    ) -> tuple[ContextProfile, dict[str, Any]]:
+    ) -> tuple[ToolProfile, dict[str, Any]]:
         selected = diagnosis.diagnoses[plan.plan.target_diagnosis]
         payload = {
-            "parent_context": parent.to_dict(),
+            "parent_tool_profile": parent.to_dict(),
+            "available_tools": tool_descriptions,
             "diagnosis": selected.to_dict(),
             "plan": plan.plan.to_dict(),
             "evaluation_contract": contract.to_dict(),
             "prior_evolution": memory_context(history, max_chars=8_000),
         }
+        known_tools = set(tool_descriptions)
 
-        def parse_candidate(data: dict[str, Any]) -> ContextProfile:
-            profile = ContextProfile.from_dict(data)
-            if not (profile.system_prompt_addendum or profile.task_prompt_addendum):
-                raise ValueError("context candidate must contain at least one addendum")
+        def parse_candidate(data: dict[str, Any]) -> ToolProfile:
+            profile = ToolProfile.from_dict(data, known_tools)
+            if not profile.description_addenda:
+                raise ValueError("tool candidate must contain at least one description addendum")
             return profile
 
         response = request_json(
             self.model,
             [
-                Message("system", CONTEXT_EVOLVER_SYSTEM_PROMPT),
+                Message("system", TOOL_EVOLVER_SYSTEM_PROMPT),
                 Message(
                     "user",
-                    "Create one general context candidate for the supplied plan. "
+                    "Create one general tool-description candidate for the supplied plan. "
                     "Return only the requested JSON.\n\n"
                     + json.dumps(payload, indent=2, ensure_ascii=False),
                 ),
             ],
             parse_candidate,
-            label="context candidate",
+            label="tool candidate",
             repair_retries=self.repair_retries,
         )
         metadata = {
@@ -109,19 +116,21 @@ class ContextEvolver:
         return response.value, metadata
 
 
-CONTEXT_EVOLVER_SYSTEM_PROMPT = """You evolve the reusable context of a software agent.
-Change only general instructions that can improve future tasks. Do not include task IDs,
-task-specific solutions, hidden tests, or benchmark answers. Preserve the evaluation contract.
+TOOL_EVOLVER_SYSTEM_PROMPT = """You evolve how a software agent understands its tools.
+Change only concise, general description addenda for existing tools. Clarify intended use,
+sequencing, verification, or common failure recovery. Do not change tool names, arguments,
+implementations, permissions, or approval requirements. Do not include benchmark answers.
 
 Return exactly:
 {
-  "system_prompt_addendum": "general instruction appended to the system prompt, or empty",
-  "task_prompt_addendum": "general instruction appended to each task prompt, or empty"
+  "description_addenda": {
+    "existing_tool_name": "focused reusable guidance appended to its description"
+  }
 }
-At least one field must contain a focused change."""
+Include only tools whose descriptions should change."""
 
 
-def evolve_context(
+def evolve_tools(
     config: EvolutionConfig,
     generation: int,
     generation_dir: Path,
@@ -131,32 +140,35 @@ def evolve_context(
     plan: EvolutionPlanReport,
     history: list[EvolutionMemoryEntry],
     *,
-    parent_context: dict[str, Any] | None,
+    parent_profile: dict[str, Any] | None,
     model_name: str,
     model: Model | None = None,
-) -> ContextEvolutionResult:
-    """Generate, evaluate, and retain or restore one prompt-context candidate."""
-    context_dir = generation_dir / "context"
-    parent = ContextProfile.from_dict(parent_context)
-    write_json(context_dir / "parent.json", parent.to_dict())
+) -> ToolEvolutionResult:
+    """Generate, evaluate, and retain or restore one tool-description profile."""
+    tool_dir = generation_dir / "tools"
+    tools = Workspace(config.repo).tools()
+    descriptions = {item.name: item.description for item in tools}
+    parent = ToolProfile.from_dict(parent_profile, set(descriptions))
+    write_json(tool_dir / "parent.json", parent.to_dict())
     model = model or OpenAICompatibleModel(
         model=model_name,
         base_url=config.base_url,
         temperature=0.0,
         timeout=300.0,
     )
-    candidate, metadata = ContextEvolver(model).create_candidate(
+    candidate, metadata = ToolEvolver(model).create_candidate(
         parent,
+        descriptions,
         diagnosis,
         plan,
         history,
         evaluator.contract,
     )
     if candidate == parent:
-        return ContextEvolutionResult(
+        return ToolEvolutionResult(
             "rejected",
             "no_change",
-            "context candidate is identical to its parent",
+            "tool candidate is identical to its parent",
             None,
             None,
             parent.to_dict(),
@@ -164,19 +176,18 @@ def evolve_context(
             metadata["output_tokens"],
         )
 
-    candidate_path = context_dir / "candidate.json"
+    candidate_path = tool_dir / "candidate.json"
     candidate_record = {**candidate.to_dict(), "path": str(candidate_path)}
     write_json(candidate_path, {**candidate.to_dict(), "generation": generation, **metadata})
-
     evaluation = evaluate_profile(
         parent_report,
         evaluator,
-        context_dir,
-        parent_context,
+        tool_dir,
+        parent_profile,
         candidate_record,
-        evaluator.set_context,
+        evaluator.set_tool_profile,
     )
-    return ContextEvolutionResult(
+    return ToolEvolutionResult(
         evaluation.decision,
         evaluation.outcome_type,
         evaluation.reason,

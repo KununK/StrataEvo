@@ -111,6 +111,7 @@ class EvolutionMemoryEntry:
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
     model_candidate: dict[str, Any] | None = None
     context_candidate: dict[str, Any] | None = None
+    tool_candidate: dict[str, Any] | None = None
     outcome: MemoryOutcome = field(
         default_factory=lambda: MemoryOutcome(
             status="not_evaluated",
@@ -144,6 +145,7 @@ class EvolutionMemoryEntry:
                 "patch_excerpt": self.patch_excerpt[:PATCH_CONTEXT_CHARS],
                 "model_candidate": self.model_candidate,
                 "context_candidate": self.context_candidate,
+                "tool_candidate": self.tool_candidate,
             },
             "outcome": self.outcome.to_context_dict(),
             "outcome_observations": self.outcome_observations,
@@ -174,6 +176,7 @@ class EvolutionMemoryEntry:
         values.setdefault("evaluation_attempts", [])
         values.setdefault("model_candidate", None)
         values.setdefault("context_candidate", None)
+        values.setdefault("tool_candidate", None)
         if not isinstance(values["evaluation_attempts"], list) or not all(
             isinstance(item, dict) for item in values["evaluation_attempts"]
         ):
@@ -241,6 +244,7 @@ class EvolutionMemoryEntry:
             evaluation_attempts=list(record.evaluation_attempts),
             model_candidate=record.model_candidate,
             context_candidate=record.context_candidate,
+            tool_candidate=record.tool_candidate,
             outcome=outcome,
         )
 

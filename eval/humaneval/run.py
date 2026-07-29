@@ -58,6 +58,7 @@ def run_agent_task(
     test_timeout: float = 10.0,
     system_prompt: str = SYSTEM_PROMPT,
     user_prompt: str = USER_PROMPT,
+    tool_description_addenda: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     return run_coding_task(
         task,
@@ -71,6 +72,7 @@ def run_agent_task(
         test_timeout=test_timeout,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
+        tool_description_addenda=tool_description_addenda,
     )
 
 

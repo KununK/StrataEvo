@@ -53,15 +53,17 @@ class EvolutionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires --enable-model-evolution"):
             _validate_args(invalid)
 
-        valid = parse_args(
-            ["--force-layer", "model", "--enable-model-evolution"]
-        )
+        valid = parse_args(["--force-layer", "model", "--enable-model-evolution"])
         _validate_args(valid)
         self.assertEqual(valid.force_layer, "model")
 
         context = parse_args(["--force-layer", "context"])
         _validate_args(context)
         self.assertEqual(context.force_layer, "context")
+
+        tools = parse_args(["--force-layer", "tools"])
+        _validate_args(tools)
+        self.assertEqual(tools.force_layer, "tools")
 
     def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
         class FakeAgent:

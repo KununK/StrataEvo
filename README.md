@@ -232,6 +232,28 @@ strataevo \
 `--force-layer context` 仅用于验证执行链路。正式实验应省略，让 Diagnosis 和 Plan 自主选择。
 ContextProfile 只允许通用指令，不保存任务 ID、具体答案、hidden tests 或 repair 代码。
 
+### Tools 层进化
+
+最小 Tool Evolution 将模型可见的工具说明增量保存为独立 `ToolProfile`。候选只能为已有
+工具追加通用的使用、顺序、验证或失败恢复说明，不改变工具名称、参数 schema、Python
+实现、审批要求或执行权限。候选与 ContextProfile 使用相同的 screening、新鲜父子复测和
+回滚事务；接受后写入 `state.json.current_tool_profile` 和 Evolution Memory，且不产生 Git
+commit。
+
+```bash
+strataevo \
+  --run-name humaneval-tools-smoke \
+  --branch evo_context \
+  --benchmark humaneval \
+  --generations 1 \
+  --eval-offset 110 \
+  --eval-limit 20 \
+  --eval-workers 10 \
+  --force-layer tools
+```
+
+`--force-layer tools` 仅用于链路测试。正式实验省略该参数，由 Diagnosis 和 Plan 自主选择。
+
 ### Model 层进化
 
 第一版 Model Evolution 会针对当前 benchmark 的失败任务生成修复轨迹，只将通过同一个

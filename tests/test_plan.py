@@ -142,6 +142,37 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertEqual(report.plan.primary_layer, EvolutionLayer.CONTEXT)
         self.assertEqual(report.plan.likely_files, [])
 
+    def test_tool_plan_does_not_require_source_files(self):
+        diagnosis = DiagnosisReport(
+            source_dir="parent",
+            input_case_count=1,
+            diagnoses=[
+                Diagnosis(
+                    primary_layer=EvolutionLayer.TOOLS,
+                    related_layers=[],
+                    problem="Tool descriptions do not explain intended sequencing.",
+                    evidence=["The agent edited before reading."],
+                    affected_tasks=["task/1"],
+                    proposed_direction="Clarify tool sequencing.",
+                    confidence=0.8,
+                )
+            ],
+            input_tokens=0,
+            output_tokens=0,
+            raw_output="{}",
+            attempts=["{}"],
+        )
+        plan = self._plan()
+        plan.update({"target_diagnosis": 0, "primary_layer": "tools", "likely_files": []})
+        model = ScriptedModel([Message("assistant", json.dumps(plan))])
+
+        report = EvolutionPlanner(model).create_plan(
+            diagnosis, self._parent(), force_layer=EvolutionLayer.TOOLS
+        )
+
+        self.assertEqual(report.plan.primary_layer, EvolutionLayer.TOOLS)
+        self.assertEqual(report.plan.likely_files, [])
+
     def test_unavailable_metric_is_repaired_once(self):
         invalid = self._plan()
         invalid["expected_outcomes"][0]["metric"] = "future_capability"

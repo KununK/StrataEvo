@@ -31,6 +31,26 @@ class ToolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             registry.register(ping)
 
+    def test_registry_can_append_descriptions_without_mutating_tools(self):
+        @tool(description="Read one file")
+        def read(path: str) -> str:
+            return path
+
+        original = ToolRegistry([read])
+        evolved = original.with_description_addenda({"read": "Inspect relevant files first."})
+
+        self.assertEqual(original.schemas[0]["function"]["description"], "Read one file")
+        self.assertEqual(
+            evolved.schemas[0]["function"]["description"],
+            "Read one file\n\nInspect relevant files first.",
+        )
+        self.assertIs(evolved.get("read").function, read.function)
+        self.assertEqual(evolved.get("read").requires_approval, read.requires_approval)
+
+    def test_registry_rejects_unknown_description_addenda(self):
+        with self.assertRaisesRegex(ValueError, "unknown tools"):
+            ToolRegistry().with_description_addenda({"missing": "guidance"})
+
     def test_optional_uses_standard_json_schema(self):
         @tool
         def lookup(year: int | None = None) -> str:

@@ -19,6 +19,8 @@ class Evaluator(Protocol):
 
     def set_context(self, context: dict[str, Any] | None) -> None: ...
 
+    def set_tool_profile(self, profile: dict[str, Any] | None) -> None: ...
+
     def evaluate(self, output_dir: Path) -> EvaluationReport: ...
 
 
@@ -84,6 +86,7 @@ class BenchmarkEvaluator:
         self.spec = spec
         self.model = config.model
         self.context: dict[str, Any] | None = None
+        self.tool_profile: dict[str, Any] | None = None
         self.contract = EvaluationContract(
             benchmark=spec.display_name,
             objective=spec.objective,
@@ -96,6 +99,9 @@ class BenchmarkEvaluator:
 
     def set_context(self, context: dict[str, Any] | None) -> None:
         self.context = context
+
+    def set_tool_profile(self, profile: dict[str, Any] | None) -> None:
+        self.tool_profile = profile
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:
         print(
@@ -131,6 +137,14 @@ class BenchmarkEvaluator:
                 encoding="utf-8",
             )
             command.extend(["--context-file", str(context_path)])
+        if self.tool_profile:
+            profile_path = output_dir.parent / f"{output_dir.name}.tools.json"
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            profile_path.write_text(
+                json.dumps(self.tool_profile, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            command.extend(["--tool-profile-file", str(profile_path)])
         if self.config.eval_limit is not None:
             command.extend(["--limit", str(self.config.eval_limit)])
         log_path = output_dir.parent / f"{output_dir.name}.log"

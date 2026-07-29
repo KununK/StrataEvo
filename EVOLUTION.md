@@ -112,6 +112,7 @@ strataevo \
 --enable-model-evolution  允许 model 计划执行 verifier-guided LoRA SFT
 --force-layer model       强制选择一个 model 诊断，仅用于链路测试
 --force-layer context     强制选择一个 context 诊断，仅用于链路测试
+--force-layer tools       强制选择一个 tools 诊断，仅用于链路测试
 --sft-device              LoRA 训练使用的物理 GPU，默认 1
 --sft-epochs              LoRA 遍历修复与 replay 训练集的次数，默认 1
 --repair-attempts         每个失败任务的修复尝试数，默认 2
@@ -390,6 +391,25 @@ Context 文件保存在 run artifact 中，不修改源码，因此不产生 Git
 
 可以使用 `--force-layer context` 单独验证该执行器。正式实验省略该参数，由四层 Diagnosis
 和 Evolution Plan 决定是否选择 context。
+
+## Tool Evolution
+
+当 Plan 的 `primary_layer` 为 `tools` 时，控制器生成一个独立 ToolProfile。第一版只允许为
+已有工具追加模型可见的通用说明，用于表达适用场景、调用顺序、结果验证和失败恢复：
+
+```json
+{
+  "description_addenda": {
+    "read_file": "在修改前读取与问题直接相关的文件。"
+  }
+}
+```
+
+它不改变工具名称、参数 schema、实现、审批要求或权限，因此工具执行契约保持不变。
+ToolProfile 与 ContextProfile 共用候选评测事务：screening 通过后进行新鲜父子复测，接受后
+写入 `state.json.current_tool_profile` 并供后续代使用；拒绝或异常时恢复父代。候选保存在
+`generation-NNNN/tools/`，包括 `parent.json`、`candidate.json`、`screening/` 和
+`promotion/`。可以使用 `--force-layer tools` 单独验证执行器。
 
 ## 跨代 Evolution Memory
 

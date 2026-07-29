@@ -19,6 +19,7 @@ from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .model_evolution import activate_saved_adapter, evolve_model
 from .mutator import mutate
 from .plan import EvolutionPlanReport, plan_evolution
+from .tool_evolution import evolve_tools
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
 
 
@@ -41,7 +42,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
     parser.add_argument("--enable-model-evolution", action="store_true")
-    parser.add_argument("--force-layer", choices=("model", "context"))
+    parser.add_argument("--force-layer", choices=("model", "context", "tools"))
     parser.add_argument("--sft-device", default="1")
     parser.add_argument("--sft-epochs", type=int, default=1)
     parser.add_argument("--sft-max-samples", type=int, default=32)
@@ -151,6 +152,8 @@ def run_one_generation(config_path: Path) -> int:
         activate_saved_adapter(config, evaluator, state.get("current_adapter"))
     if state.get("current_context"):
         evaluator.set_context(state["current_context"])
+    if state.get("current_tool_profile"):
+        evaluator.set_tool_profile(state["current_tool_profile"])
     parent_report = EvaluationReport.from_dict(state["current_report"])
     if parent_report.task_score >= 1.0:
         state["completed"] = True
@@ -229,6 +232,55 @@ def run_one_generation(config_path: Path) -> int:
                 diagnosis,
                 plan_report,
                 f"Context candidate: {context_result.reason}",
+            )
+            _print_generation(record)
+            return 0
+        if plan_report.plan.primary_layer.value == "tools":
+            tool_result = evolve_tools(
+                config,
+                generation,
+                generation_dir,
+                parent_report,
+                evaluator,
+                diagnosis,
+                plan_report,
+                memory.relevant({"tools"}),
+                parent_profile=state.get("current_tool_profile"),
+                model_name=str(state.get("current_model", config.model)),
+            )
+            if tool_result.decision == "accepted":
+                state["current_tool_profile"] = tool_result.candidate
+                state["current_report"] = tool_result.candidate_report.to_dict()
+            record = _record(
+                generation,
+                parent_commit,
+                None,
+                tool_result.decision,
+                tool_result.outcome_type,
+                tool_result.reason,
+                [],
+                None,
+                diagnosis_path,
+                diagnosis,
+                plan_path,
+                plan_report,
+                parent_report,
+                tool_result.promotion_parent_report,
+                tool_result.candidate_report,
+                None,
+                [],
+                tool_candidate=tool_result.candidate,
+                evolution_usage=(tool_result.input_tokens, tool_result.output_tokens),
+            )
+            _finish_generation(
+                state_path,
+                state,
+                generation_dir,
+                record,
+                memory,
+                diagnosis,
+                plan_report,
+                f"Tool candidate: {tool_result.reason}",
             )
             _print_generation(record)
             return 0
@@ -456,6 +508,7 @@ def _load_or_create_state(
         state.setdefault("current_model", model)
         state.setdefault("current_adapter", None)
         state.setdefault("current_context", None)
+        state.setdefault("current_tool_profile", None)
         return state
     report = evaluator.evaluate(run_dir / "baseline" / "evaluation")
     state = {
@@ -464,6 +517,7 @@ def _load_or_create_state(
         "current_model": model,
         "current_adapter": None,
         "current_context": None,
+        "current_tool_profile": None,
         "current_report": report.to_dict(),
     }
     write_json(path, state)
@@ -502,6 +556,7 @@ def _record(
     *,
     model_candidate: dict[str, Any] | None = None,
     context_candidate: dict[str, Any] | None = None,
+    tool_candidate: dict[str, Any] | None = None,
     evolution_usage: tuple[int, int] = (0, 0),
 ) -> GenerationRecord:
     return GenerationRecord(
@@ -530,6 +585,8 @@ def _record(
             if agent_result
             else "context_evolution"
             if context_candidate
+            else "tool_evolution"
+            if tool_candidate
             else "model_evolution"
         ),
         agent_steps=agent_result.steps if agent_result else 0,
@@ -538,6 +595,7 @@ def _record(
         evaluation_attempts=evaluation_attempts,
         model_candidate=model_candidate,
         context_candidate=context_candidate,
+        tool_candidate=tool_candidate,
     )
 
 

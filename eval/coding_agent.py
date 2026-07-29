@@ -50,6 +50,7 @@ class TaskRunner(Protocol):
         test_timeout: float = 10.0,
         system_prompt: str = SYSTEM_PROMPT,
         user_prompt: str = USER_PROMPT,
+        tool_description_addenda: dict[str, str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
 
@@ -73,6 +74,7 @@ def add_common_arguments(
     parser.add_argument("--test-timeout", type=float, default=10.0)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--context-file")
+    parser.add_argument("--tool-profile-file")
     parser.add_argument("--no-resume", action="store_true")
 
 
@@ -109,6 +111,7 @@ def run_agent_task(
     system_prompt: str = SYSTEM_PROMPT,
     user_prompt: str = USER_PROMPT,
     extra_files: dict[str, str] | None = None,
+    tool_description_addenda: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run one isolated Agent task, preserve its candidate, and evaluate it."""
     started = time.perf_counter()
@@ -125,9 +128,12 @@ def run_agent_task(
         session_store = SessionStore(session_dir) if session_dir else None
         if session_dir:
             (session_dir / f"{session_id}.json").unlink(missing_ok=True)
+        tools = ToolRegistry(Workspace(workspace).tools()).with_description_addenda(
+            tool_description_addenda or {}
+        )
         agent = Agent(
             model=model,
-            tools=ToolRegistry(Workspace(workspace).tools()),
+            tools=tools,
             system_prompt=system_prompt,
             max_steps=max_steps,
             approval=allow_all,
@@ -234,6 +240,7 @@ def run_benchmark(
         timeout=args.model_timeout,
     )
     system_prompt, user_prompt = load_context_prompts(args.context_file)
+    tool_addenda = load_tool_profile(args.tool_profile_file)
 
     pending_tasks = [task for task in tasks if str(task["task_id"]) not in completed]
     with tqdm(
@@ -257,6 +264,7 @@ def run_benchmark(
                     test_timeout=args.test_timeout,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
+                    tool_description_addenda=tool_addenda,
                 )
                 futures[future] = task
 
@@ -314,6 +322,18 @@ def load_context_prompts(path: str | None) -> tuple[str, str]:
     system_prompt = SYSTEM_PROMPT + (f"\n\n{system_addendum}" if system_addendum else "")
     user_prompt = USER_PROMPT + (f"\n\n{task_addendum}" if task_addendum else "")
     return system_prompt, user_prompt
+
+
+def load_tool_profile(path: str | None) -> dict[str, str]:
+    if not path:
+        return {}
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    values = data.get("description_addenda", {}) if isinstance(data, dict) else None
+    if not isinstance(values, dict) or not all(
+        isinstance(name, str) and isinstance(text, str) for name, text in values.items()
+    ):
+        raise ValueError("tool profile must contain a description_addenda object of strings")
+    return {name: text.strip() for name, text in values.items() if text.strip()}
 
 
 def failed_result(status: str, error: str) -> dict[str, Any]:

@@ -7,7 +7,7 @@ import json
 import shlex
 import types
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import (
     Any,
     Literal,
@@ -68,6 +68,20 @@ class ToolRegistry:
     @property
     def schemas(self) -> list[dict[str, Any]]:
         return [item.schema for item in self._tools.values()]
+
+    def with_description_addenda(self, addenda: dict[str, str]) -> ToolRegistry:
+        """Return a registry with additional model-facing guidance."""
+        unknown = set(addenda) - self._tools.keys()
+        if unknown:
+            raise ValueError(f"unknown tools: {', '.join(sorted(unknown))}")
+        return ToolRegistry(
+            [
+                replace(item, description=f"{item.description}\n\n{addenda[item.name]}")
+                if addenda.get(item.name)
+                else item
+                for item in self._tools.values()
+            ]
+        )
 
     def __iter__(self) -> Iterator[Tool]:
         return iter(self._tools.values())
