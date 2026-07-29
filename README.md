@@ -169,8 +169,8 @@ StrataEvo 的每一代按以下顺序运行：
 
 ```text
 benchmark -> Evidence -> 四层 Diagnosis -> Evolution Plan
-          -> 代内多轮修改与候选评测 -> 新鲜父子复测
-          -> Git 提交或回滚 -> Evolution Memory
+          -> 对应层候选生成与评测 -> 新鲜父子复测
+          -> 接受或回滚 -> Evolution Memory
 ```
 
 四层是 Model、Context、Tools 和 Architecture。Evidence 只保存任务结果、候选文件状态、
@@ -207,6 +207,30 @@ strataevo \
   --generations 5 \
   --eval-workers 10
 ```
+
+### Context 层进化
+
+Context Evolution 将通用提示词增量保存为独立 `ContextProfile`，而不是修改 Python 源码。
+候选包含 `system_prompt_addendum` 和 `task_prompt_addendum`，会在 benchmark 运行时追加到
+固定基础提示词。候选经过 screening 和新鲜父子复测；接受后写入 `state.json` 和
+`evolution_memory.jsonl`，拒绝则恢复父代 context。它不会产生 Git evolution commit。
+
+最小链路测试可以使用：
+
+```bash
+strataevo \
+  --run-name humaneval-context-smoke \
+  --branch evo_context \
+  --benchmark humaneval \
+  --generations 1 \
+  --eval-offset 110 \
+  --eval-limit 20 \
+  --eval-workers 10 \
+  --force-layer context
+```
+
+`--force-layer context` 仅用于验证执行链路。正式实验应省略，让 Diagnosis 和 Plan 自主选择。
+ContextProfile 只允许通用指令，不保存任务 ID、具体答案、hidden tests 或 repair 代码。
 
 ### Model 层进化
 

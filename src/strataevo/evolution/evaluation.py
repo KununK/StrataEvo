@@ -7,7 +7,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from .contract import EvaluationContract
 from .evidence import CodingAgentEvidenceCollector
@@ -16,6 +16,8 @@ from .types import EvaluationReport, EvolutionConfig
 
 class Evaluator(Protocol):
     contract: EvaluationContract
+
+    def set_context(self, context: dict[str, Any] | None) -> None: ...
 
     def evaluate(self, output_dir: Path) -> EvaluationReport: ...
 
@@ -81,6 +83,7 @@ class BenchmarkEvaluator:
         self.config = config
         self.spec = spec
         self.model = config.model
+        self.context: dict[str, Any] | None = None
         self.contract = EvaluationContract(
             benchmark=spec.display_name,
             objective=spec.objective,
@@ -90,6 +93,9 @@ class BenchmarkEvaluator:
 
     def set_model(self, model: str) -> None:
         self.model = model
+
+    def set_context(self, context: dict[str, Any] | None) -> None:
+        self.context = context
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:
         print(
@@ -117,6 +123,14 @@ class BenchmarkEvaluator:
             "--no-resume",
             *self.spec.arguments,
         ]
+        if self.context:
+            context_path = output_dir.parent / f"{output_dir.name}.context.json"
+            context_path.parent.mkdir(parents=True, exist_ok=True)
+            context_path.write_text(
+                json.dumps(self.context, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            command.extend(["--context-file", str(context_path)])
         if self.config.eval_limit is not None:
             command.extend(["--limit", str(self.config.eval_limit)])
         log_path = output_dir.parent / f"{output_dir.name}.log"

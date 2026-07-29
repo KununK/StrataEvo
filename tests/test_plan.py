@@ -103,6 +103,45 @@ class EvolutionPlanTests(unittest.TestCase):
                 force_layer=EvolutionLayer.MODEL,
             )
 
+    def test_context_plan_does_not_require_source_files(self):
+        diagnosis = DiagnosisReport(
+            source_dir="parent",
+            input_case_count=1,
+            diagnoses=[
+                Diagnosis(
+                    primary_layer=EvolutionLayer.CONTEXT,
+                    related_layers=[],
+                    problem="The reusable instructions are unclear.",
+                    evidence=["One task stopped without the required artifact."],
+                    affected_tasks=["task/1"],
+                    proposed_direction="Clarify the completion instruction.",
+                    confidence=0.8,
+                )
+            ],
+            input_tokens=0,
+            output_tokens=0,
+            raw_output="{}",
+            attempts=["{}"],
+        )
+        plan = self._plan()
+        plan.update(
+            {
+                "target_diagnosis": 0,
+                "primary_layer": "context",
+                "likely_files": [],
+            }
+        )
+        model = ScriptedModel([Message("assistant", json.dumps(plan))])
+
+        report = EvolutionPlanner(model).create_plan(
+            diagnosis,
+            self._parent(),
+            force_layer=EvolutionLayer.CONTEXT,
+        )
+
+        self.assertEqual(report.plan.primary_layer, EvolutionLayer.CONTEXT)
+        self.assertEqual(report.plan.likely_files, [])
+
     def test_unavailable_metric_is_repaired_once(self):
         invalid = self._plan()
         invalid["expected_outcomes"][0]["metric"] = "future_capability"

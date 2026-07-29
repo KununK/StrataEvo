@@ -111,6 +111,7 @@ strataevo \
 --benchmark-max-steps     每个被评测 Agent 的最大工具循环步数
 --enable-model-evolution  允许 model 计划执行 verifier-guided LoRA SFT
 --force-layer model       强制选择一个 model 诊断，仅用于链路测试
+--force-layer context     强制选择一个 context 诊断，仅用于链路测试
 --sft-device              LoRA 训练使用的物理 GPU，默认 1
 --sft-epochs              LoRA 遍历修复与 replay 训练集的次数，默认 1
 --repair-attempts         每个失败任务的修复尝试数，默认 2
@@ -261,7 +262,7 @@ evolution/runs/<run_name>/
 
 - `config.json`：本次演化实验的固定配置；
 - `evaluation_contract.json`：当前 benchmark 的目标、直接生效路径和延迟生效路径；
-- `state.json`：当前代数、当前提交和父代评分；
+- `state.json`：当前代数、当前提交、已激活模型/context 和父代评分；
 - `evolution_memory.jsonl`：所有已完成代的诊断、修改、指标和接受/拒绝结果；
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
 - `plan.json`：从诊断中选中的单一问题、干预、预期指标和长期价值假设；
@@ -270,6 +271,8 @@ evolution/runs/<run_name>/
 - `attempt-NNNN/attempt.json`：该次验证、评测状态和报告；
 - `promotion/comparison.json`：探索最佳结果、新鲜父代结果和候选确认结果；
 - `record.json`：父代、本代最佳候选、全部 attempts、晋级决定和原因；
+- `context/parent.json`、`context/candidate.json`：父代与候选 ContextProfile；
+- `context/screening/`、`context/promotion/`：context 候选筛选和新鲜父子复测；
 - `model/repairs/`：失败任务的修复轨迹、verifier 结果及修复成功/仍失败任务；
 - `model/adapter/training_metrics.json`：LoRA 的 epochs、steps 和 loss；
 - `*/evaluation/tasks.jsonl`：该次 benchmark 实际选择的完整任务快照，供修复器复用；
@@ -369,6 +372,24 @@ Planner 还会收到真实的可演化根目录和其中已有的文件清单。
 长期价值目前只用于记录研究假设。一个修改即使可能帮助未来进化，仍必须通过当前固定测试、
 pass@1 晋级规则；本阶段不会因为推测性的长期价值接受当前无收益的候选。后续
 加入独立的进化能力评测后，可以利用这些字段重新分析“当前无用但具有未来价值”的改动。
+
+## Context Evolution
+
+当 Plan 的 `primary_layer` 为 `context` 时，控制器不会启动源码 Mutator，而是生成一个独立
+ContextProfile：
+
+```text
+system_prompt_addendum  追加到固定 system prompt 的通用指令
+task_prompt_addendum    追加到每道任务 user prompt 的通用指令
+```
+
+Context 候选不能包含任务 ID、具体解答、hidden tests 或 repair 代码。它先参与 screening；
+只有高于当前父代才进入新鲜父子复测。接受后 `state.json.current_context` 指向候选文件，后续
+所有 benchmark 和其他层演化都会继续使用该 context；拒绝或异常时 evaluator 立即恢复父代。
+Context 文件保存在 run artifact 中，不修改源码，因此不产生 Git commit。
+
+可以使用 `--force-layer context` 单独验证该执行器。正式实验省略该参数，由四层 Diagnosis
+和 Evolution Plan 决定是否选择 context。
 
 ## 跨代 Evolution Memory
 

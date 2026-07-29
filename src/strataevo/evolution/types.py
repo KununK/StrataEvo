@@ -95,6 +95,7 @@ class GenerationRecord:
     output_tokens: int
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
     model_candidate: dict[str, Any] | None = None
+    context_candidate: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

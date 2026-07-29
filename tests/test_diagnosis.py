@@ -165,6 +165,38 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn("response was invalid", model.requests[1][-1].content)
         self.assertNotIn("not json", model.requests[1][-1].content)
 
+    def test_forced_context_layer_is_repaired_when_missing(self):
+        def response(layer):
+            return {
+                "diagnoses": [
+                    {
+                        "primary_layer": layer,
+                        "related_layers": [],
+                        "problem": "The instructions permit premature completion.",
+                        "evidence": ["HumanEval/25 completed without its artifact."],
+                        "affected_tasks": ["HumanEval/25"],
+                        "proposed_direction": "Clarify the reusable completion instruction.",
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+
+        model = ScriptedModel(
+            [
+                Message("assistant", json.dumps(response("architecture"))),
+                Message("assistant", json.dumps(response("context"))),
+            ]
+        )
+
+        report = EvidenceDiagnoser(model).diagnose(
+            self._bundle(), force_layer=EvolutionLayer.CONTEXT
+        )
+
+        self.assertEqual(report.diagnoses[0].primary_layer, EvolutionLayer.CONTEXT)
+        self.assertIn("forced layer", model.requests[1][-1].content)
+        self.assertIn("context", model.requests[1][-1].content)
+        self.assertIn("forced_layer", model.requests[0][1].content)
+
     def test_diagnosis_requires_affected_task(self):
         response = {
             "diagnoses": [

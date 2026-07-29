@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from eval.coding_agent import (
+    SYSTEM_PROMPT,
+    USER_PROMPT,
     add_common_arguments,
     load_local_rows,
     run_benchmark,
@@ -54,6 +56,8 @@ def run_agent_task(
     session_dir: Path | None = None,
     max_steps: int = 12,
     test_timeout: float = 10.0,
+    system_prompt: str = SYSTEM_PROMPT,
+    user_prompt: str = USER_PROMPT,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     return run_coding_task(
         task,
@@ -65,6 +69,8 @@ def run_agent_task(
         session_dir=session_dir,
         max_steps=max_steps,
         test_timeout=test_timeout,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
     )
 
 

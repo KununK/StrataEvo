@@ -124,6 +124,7 @@ class EvidenceDiagnoser:
         self,
         bundle: EvidenceBundle,
         history: list[EvolutionMemoryEntry] | None = None,
+        force_layer: EvolutionLayer | None = None,
     ) -> DiagnosisReport:
         candidates = _select_cases(bundle.cases, self.max_cases)
         payload = {
@@ -136,6 +137,7 @@ class EvidenceDiagnoser:
                 "requires_strict_improvement": True,
             },
             "cases": [],
+            "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(
                 history or [],
                 max_chars=min(MEMORY_LIMIT_CHARS, self.context_limit_chars // 5),
@@ -160,10 +162,19 @@ class EvidenceDiagnoser:
             ),
         ]
         known_tasks = {case.task_id for case in cases}
+
+        def parse(data: dict[str, Any]) -> list[Diagnosis]:
+            diagnoses = _parse_diagnoses(data, known_tasks)
+            if force_layer and not any(item.primary_layer is force_layer for item in diagnoses):
+                raise ValueError(
+                    f"diagnosis must include the forced layer {force_layer.value!r}"
+                )
+            return diagnoses
+
         response = request_json(
             self.model,
             messages,
-            lambda data: _parse_diagnoses(data, known_tasks),
+            parse,
             label="diagnosis",
             repair_retries=self.repair_retries,
         )
@@ -190,7 +201,8 @@ Layer definitions:
 - tools: tool schemas, descriptions, implementations, skills, and tool-result representations.
 - architecture: agent loop, planning, stopping, validation, recovery, state, and orchestration.
 
-Use only supplied observations. Cite task IDs and concrete events in evidence. Prior evolution
+Use only supplied observations. Cite task IDs and concrete events in evidence. If forced_layer is
+not null, include an evidence-grounded diagnosis whose primary_layer matches it. Prior evolution
 records are outcomes, not proof of the current cause: use them to avoid blindly repeating rejected
 hypotheses and to preserve improvements that were accepted. Do not propose code or claim hidden
 causes. Treat each case's passed field as authoritative. A passed case that stopped at max_steps is
@@ -229,7 +241,8 @@ def diagnose_evaluation(
         temperature=0.0,
         timeout=300.0,
     )
-    diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history)
+    forced_layer = EvolutionLayer(config.force_layer) if config.force_layer else None
+    diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history, forced_layer)
     write_json(destination, diagnosis.to_dict())
     return diagnosis
 

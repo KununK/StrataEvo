@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .attempts import CandidateEvaluationSession
+from .context_evolution import evolve_context
 from .diagnosis import DiagnosisReport, diagnose_evaluation
 from .evaluation import BENCHMARKS, Evaluator, create_evaluator, validation_commands
 from .git import GitRepository
@@ -40,7 +41,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
     parser.add_argument("--enable-model-evolution", action="store_true")
-    parser.add_argument("--force-layer", choices=("model",))
+    parser.add_argument("--force-layer", choices=("model", "context"))
     parser.add_argument("--sft-device", default="1")
     parser.add_argument("--sft-epochs", type=int, default=1)
     parser.add_argument("--sft-max-samples", type=int, default=32)
@@ -148,6 +149,8 @@ def run_one_generation(config_path: Path) -> int:
     state = _load_or_create_state(state_path, git, evaluator, run_dir, config.model)
     if config.model_evolution:
         activate_saved_adapter(config, evaluator, state.get("current_adapter"))
+    if state.get("current_context"):
+        evaluator.set_context(state["current_context"])
     parent_report = EvaluationReport.from_dict(state["current_report"])
     if parent_report.task_score >= 1.0:
         state["completed"] = True
@@ -180,6 +183,55 @@ def run_one_generation(config_path: Path) -> int:
             plan_path,
             evaluator.contract,
         )
+        if plan_report.plan.primary_layer.value == "context":
+            context_result = evolve_context(
+                config,
+                generation,
+                generation_dir,
+                parent_report,
+                evaluator,
+                diagnosis,
+                plan_report,
+                memory.relevant({"context"}),
+                parent_context=state.get("current_context"),
+                model_name=str(state.get("current_model", config.model)),
+            )
+            if context_result.decision == "accepted":
+                state["current_context"] = context_result.candidate
+                state["current_report"] = context_result.candidate_report.to_dict()
+            record = _record(
+                generation,
+                parent_commit,
+                None,
+                context_result.decision,
+                context_result.outcome_type,
+                context_result.reason,
+                [],
+                None,
+                diagnosis_path,
+                diagnosis,
+                plan_path,
+                plan_report,
+                parent_report,
+                context_result.promotion_parent_report,
+                context_result.candidate_report,
+                None,
+                [],
+                context_candidate=context_result.candidate,
+                evolution_usage=(context_result.input_tokens, context_result.output_tokens),
+            )
+            _finish_generation(
+                state_path,
+                state,
+                generation_dir,
+                record,
+                memory,
+                diagnosis,
+                plan_report,
+                f"Context candidate: {context_result.reason}",
+            )
+            _print_generation(record)
+            return 0
         if plan_report.plan.primary_layer.value == "model" and config.model_evolution:
             model_result = evolve_model(
                 config,
@@ -403,6 +455,7 @@ def _load_or_create_state(
             raise RuntimeError("evolution state does not match the current Git revision")
         state.setdefault("current_model", model)
         state.setdefault("current_adapter", None)
+        state.setdefault("current_context", None)
         return state
     report = evaluator.evaluate(run_dir / "baseline" / "evaluation")
     state = {
@@ -410,6 +463,7 @@ def _load_or_create_state(
         "current_commit": git.head(),
         "current_model": model,
         "current_adapter": None,
+        "current_context": None,
         "current_report": report.to_dict(),
     }
     write_json(path, state)
@@ -447,6 +501,8 @@ def _record(
     evaluation_attempts: list[dict[str, Any]],
     *,
     model_candidate: dict[str, Any] | None = None,
+    context_candidate: dict[str, Any] | None = None,
+    evolution_usage: tuple[int, int] = (0, 0),
 ) -> GenerationRecord:
     return GenerationRecord(
         generation=generation,
@@ -469,12 +525,19 @@ def _record(
             promotion_parent_report.to_dict() if promotion_parent_report else None
         ),
         candidate_report=candidate_report.to_dict() if candidate_report else None,
-        agent_stop_reason=agent_result.stop_reason if agent_result else "model_evolution",
+        agent_stop_reason=(
+            agent_result.stop_reason
+            if agent_result
+            else "context_evolution"
+            if context_candidate
+            else "model_evolution"
+        ),
         agent_steps=agent_result.steps if agent_result else 0,
-        input_tokens=agent_result.usage.input_tokens if agent_result else 0,
-        output_tokens=agent_result.usage.output_tokens if agent_result else 0,
+        input_tokens=agent_result.usage.input_tokens if agent_result else evolution_usage[0],
+        output_tokens=agent_result.usage.output_tokens if agent_result else evolution_usage[1],
         evaluation_attempts=evaluation_attempts,
         model_candidate=model_candidate,
+        context_candidate=context_candidate,
     )
 
 

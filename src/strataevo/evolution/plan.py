@@ -118,8 +118,10 @@ class EvolutionPlan:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError("plan confidence must be between 0 and 1")
         likely_files = _string_list(data.get("likely_files", []), "likely_files")
-        trains_adapter = primary_layer is EvolutionLayer.MODEL and model_evolution
-        if not likely_files and not trains_adapter:
+        external_candidate = primary_layer is EvolutionLayer.CONTEXT or (
+            primary_layer is EvolutionLayer.MODEL and model_evolution
+        )
+        if not likely_files and not external_candidate:
             raise ValueError("plan likely_files must not be empty")
         invalid_files = [path for path in likely_files if not _is_mutable_path(path, mutable_paths)]
         if invalid_files:
@@ -205,6 +207,10 @@ class EvolutionPlanner:
                 "enabled": model_evolution,
                 "mechanism": "verifier-guided test-time LoRA SFT",
             },
+            "context_evolution": {
+                "enabled": True,
+                "mechanism": "versioned reusable prompt addenda",
+            },
             "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(history or [], max_chars=12_000),
         }
@@ -266,10 +272,11 @@ paths guide the mutation but do not narrow its configured write permissions.
 
 The evaluation_contract is authoritative when present. Its direct_paths are loaded by the active
 benchmark and can be evaluated now. Its deferred_paths affect later evolution but are not loaded by
-the active benchmark. Plan only a change under direct_paths. Never claim that a deferred change is
-validated by an immediate benchmark score. The one exception is a primary_layer=model plan when
-model_evolution.enabled is true: it trains a LoRA adapter from verifier-passing trajectories and
-must use an empty likely_files list because it changes weights rather than repository files.
+the active benchmark. Source-code plans must change only direct_paths. Never claim that a deferred
+change is validated by an immediate benchmark score. A model plan has empty likely_files because
+it changes
+model weights, not repository files. A context plan also has empty likely_files because it creates a
+versioned prompt candidate instead of a source patch.
 When forced_layer is not null, select a diagnosis whose primary_layer exactly matches it.
 
 Return exactly this JSON object:

@@ -48,6 +48,8 @@ class TaskRunner(Protocol):
         session_dir: Path | None = None,
         max_steps: int = 12,
         test_timeout: float = 10.0,
+        system_prompt: str = SYSTEM_PROMPT,
+        user_prompt: str = USER_PROMPT,
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
 
@@ -70,6 +72,7 @@ def add_common_arguments(
     parser.add_argument("--model-timeout", type=float, default=120.0)
     parser.add_argument("--test-timeout", type=float, default=10.0)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--context-file")
     parser.add_argument("--no-resume", action="store_true")
 
 
@@ -230,6 +233,7 @@ def run_benchmark(
         temperature=args.temperature,
         timeout=args.model_timeout,
     )
+    system_prompt, user_prompt = load_context_prompts(args.context_file)
 
     pending_tasks = [task for task in tasks if str(task["task_id"]) not in completed]
     with tqdm(
@@ -251,6 +255,8 @@ def run_benchmark(
                     session_dir=sessions_dir,
                     max_steps=args.max_steps,
                     test_timeout=args.test_timeout,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
                 )
                 futures[future] = task
 
@@ -291,6 +297,23 @@ def run_benchmark(
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
+
+
+def load_context_prompts(path: str | None) -> tuple[str, str]:
+    if not path:
+        return SYSTEM_PROMPT, USER_PROMPT
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("context file must contain a JSON object")
+    system_addendum = data.get("system_prompt_addendum", "")
+    task_addendum = data.get("task_prompt_addendum", "")
+    if not isinstance(system_addendum, str) or not isinstance(task_addendum, str):
+        raise ValueError("context addenda must be strings")
+    system_addendum = system_addendum.strip()
+    task_addendum = task_addendum.strip()
+    system_prompt = SYSTEM_PROMPT + (f"\n\n{system_addendum}" if system_addendum else "")
+    user_prompt = USER_PROMPT + (f"\n\n{task_addendum}" if task_addendum else "")
+    return system_prompt, user_prompt
 
 
 def failed_result(status: str, error: str) -> dict[str, Any]:

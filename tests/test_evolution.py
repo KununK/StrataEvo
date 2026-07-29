@@ -13,6 +13,7 @@ from strataevo.evolution.cli import (
     parse_args,
     run_one_generation,
 )
+from strataevo.evolution.context_evolution import ContextEvolutionResult
 from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
@@ -57,6 +58,10 @@ class EvolutionTests(unittest.TestCase):
         )
         _validate_args(valid)
         self.assertEqual(valid.force_layer, "model")
+
+        context = parse_args(["--force-layer", "context"])
+        _validate_args(context)
+        self.assertEqual(context.force_layer, "context")
 
     def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
         class FakeAgent:
@@ -699,6 +704,121 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(len(memory), 1)
             self.assertEqual(memory[0]["decision"], "rejected")
             self.assertIsNone(memory[0]["candidate_task_score"])
+
+    def test_context_generation_persists_candidate_without_git_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            (source / "agent.py").write_text("VERSION = 0\n", encoding="utf-8")
+            (root / ".gitignore").write_text("evolution/runs/\n", encoding="utf-8")
+            self._git(root, "init", "-b", "evo")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+            parent_commit = self._git_output(root, "rev-parse", "HEAD").strip()
+
+            run_dir = root / "evolution/runs/test"
+            run_dir.mkdir(parents=True)
+            config = EvolutionConfig(repo=str(root), run_name="test", branch="evo")
+            config_path = run_dir / "config.json"
+            config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+
+            class FakeEvaluator:
+                contract = TEST_CONTRACT
+
+                def evaluate(self, output_dir):
+                    return EvaluationReport(0.5, {}, str(output_dir), "evaluation.log")
+
+                def set_context(self, _context):
+                    pass
+
+            diagnosis = DiagnosisReport(
+                source_dir="parent",
+                input_case_count=1,
+                diagnoses=[
+                    Diagnosis(
+                        primary_layer=EvolutionLayer.CONTEXT,
+                        related_layers=[],
+                        problem="test context problem",
+                        evidence=["test evidence"],
+                        affected_tasks=["test/1"],
+                        proposed_direction="clarify reusable instructions",
+                        confidence=1.0,
+                    )
+                ],
+                input_tokens=0,
+                output_tokens=0,
+                raw_output="{}",
+                attempts=["{}"],
+            )
+            plan = EvolutionPlanReport(
+                plan=EvolutionPlan(
+                    target_diagnosis=0,
+                    primary_layer=EvolutionLayer.CONTEXT,
+                    hypothesis="test hypothesis",
+                    intervention="add one prompt instruction",
+                    expected_outcomes=[
+                        ExpectedOutcome(
+                            metric="task_score",
+                            direction=MetricDirection.INCREASE,
+                            reason="improve task score",
+                        )
+                    ],
+                    likely_files=[],
+                    expected_long_term_value="reusable instructions",
+                    prerequisites=[],
+                    confidence=0.8,
+                ),
+                available_metrics={"task_score": 0.5},
+                input_tokens=0,
+                output_tokens=0,
+                raw_output="{}",
+                attempts=["{}"],
+            )
+            candidate_report = EvaluationReport(0.6, {}, "candidate", "candidate.log")
+            context_candidate = {
+                "system_prompt_addendum": "Check the requested artifact.",
+                "task_prompt_addendum": "",
+                "path": "candidate.json",
+            }
+            result = ContextEvolutionResult(
+                decision="accepted",
+                outcome_type="accepted",
+                reason="fresh promotion comparison: pass@1 strictly improved",
+                candidate_report=candidate_report,
+                promotion_parent_report=EvaluationReport(
+                    0.5, {}, "fresh-parent", "fresh-parent.log"
+                ),
+                candidate=context_candidate,
+                input_tokens=12,
+                output_tokens=4,
+            )
+
+            with (
+                patch(
+                    "strataevo.evolution.cli.create_evaluator",
+                    return_value=FakeEvaluator(),
+                ),
+                patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
+                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch("strataevo.evolution.cli.evolve_context", return_value=result),
+            ):
+                self.assertEqual(run_one_generation(config_path), 0)
+
+            state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["current_context"], context_candidate)
+            self.assertEqual(state["current_report"]["task_score"], 0.6)
+            self.assertEqual(state["current_commit"], parent_commit)
+            record = json.loads(
+                (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["context_candidate"], context_candidate)
+            self.assertEqual(record["agent_stop_reason"], "context_evolution")
+            self.assertEqual(record["input_tokens"], 12)
+            self.assertEqual(self._git_output(root, "rev-parse", "HEAD").strip(), parent_commit)
 
     @staticmethod
     def _git(root: Path, *arguments: str) -> None:
