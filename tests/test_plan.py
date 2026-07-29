@@ -163,7 +163,13 @@ class EvolutionPlanTests(unittest.TestCase):
             attempts=["{}"],
         )
         plan = self._plan()
-        plan.update({"target_diagnosis": 0, "primary_layer": "tools", "likely_files": []})
+        plan.update(
+            {
+                "target_diagnosis": 0,
+                "primary_layer": "tools",
+                "likely_files": ["src/tinyagent/tool.py"],
+            }
+        )
         model = ScriptedModel([Message("assistant", json.dumps(plan))])
 
         report = EvolutionPlanner(model).create_plan(

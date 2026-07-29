@@ -122,8 +122,8 @@ class EvolutionPlan:
             EvolutionLayer.CONTEXT,
             EvolutionLayer.TOOLS,
         } or (primary_layer is EvolutionLayer.MODEL and model_evolution)
-        if external_candidate and likely_files:
-            raise ValueError("external evolution candidates must have empty likely_files")
+        if external_candidate:
+            likely_files = []
         if not likely_files and not external_candidate:
             raise ValueError("plan likely_files must not be empty")
         invalid_files = [path for path in likely_files if not _is_mutable_path(path, mutable_paths)]
