@@ -220,6 +220,9 @@ class EvolutionPlanner:
             },
             "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(history or [], max_chars=12_000),
+            "execution_history": [
+                _execution_record(entry) for entry in history or []
+            ],
             "refuted_hypotheses": [
                 {
                     "generation": entry.generation,
@@ -236,7 +239,7 @@ class EvolutionPlanner:
                     "generation": entry.generation,
                     "layer": entry.plan.get("primary_layer"),
                     "hypothesis": entry.plan.get("hypothesis"),
-                    "intervention": entry.plan.get("intervention"),
+                    "planned_intervention": entry.plan.get("intervention"),
                     "verdict": getattr(
                         entry.outcome, "intervention_verdict", "untested"
                     ),
@@ -285,12 +288,18 @@ PLANNER_SYSTEM_PROMPT = """You plan one intervention for a self-evolving softwar
 Select exactly one supplied diagnosis. Prefer a direction supported by concrete evidence, not
 already disproven by prior evolution, and likely to produce a measurable improvement without
 regressing task quality. A rejected prior attempt does not prove the whole direction is useless,
-but repeating the same intervention requires new evidence or a materially different mechanism.
+but repeating the same executed intervention requires new evidence, different affected tasks, or
+a materially different execution.
 The refuted_hypotheses list is evidence against a causal hypothesis. The failed_interventions list
 is evidence that a specific action was ineffective or could not produce a valid candidate. These
 are different conclusions: an execution failure leaves its causal hypothesis open, but the failed
 intervention must not be repeated unchanged. Reuse a causal direction only through a materially
 different mechanism or when current evidence explains why the previous intervention failed.
+The execution_history distinguishes intended actions from what each layer actually executed.
+Treat executed_intervention as authoritative evidence of what was tested. Do not claim that a
+planned behavior was evaluated when the executor performed a different action. An accepted
+execution may be extended to newly affected or remaining failed tasks; an ineffective or failed
+execution must be revised rather than copied.
 Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluation-contract
 mismatch: the intervention was not tested by the benchmark and must not be interpreted as a
 negative task result.
@@ -313,6 +322,10 @@ change is validated by an immediate benchmark score. A model plan has empty like
 it changes
 model weights, not repository files. Context and tools plans also have empty likely_files because
 they create versioned external profiles instead of source patches.
+Write intervention in terms that the selected layer mechanism can actually execute. For model
+evolution, describe the failure-focused repair guidance or training experience to collect, not a
+new runtime control-flow component. For context and tools, describe prompt or tool-description
+changes. For architecture, describe the source behavior to change.
 When forced_layer is not null, select a diagnosis whose primary_layer exactly matches it.
 
 Return exactly this JSON object:
@@ -333,6 +346,92 @@ Return exactly this JSON object:
   "prerequisites": ["condition needed for the future value"],
   "confidence": 0.0
 }"""
+
+
+def _execution_record(entry: EvolutionMemoryEntry) -> dict[str, Any]:
+    return {
+        "generation": entry.generation,
+        "layer": entry.plan.get("primary_layer"),
+        "decision": getattr(entry, "decision", None),
+        "outcome_type": getattr(entry, "outcome_type", None),
+        "planned_intervention": entry.plan.get("intervention"),
+        "executed_intervention": _executed_intervention(entry),
+        "intervention_verdict": getattr(
+            entry.outcome, "intervention_verdict", "untested"
+        ),
+        "intervention_evidence": getattr(entry.outcome, "intervention_evidence", []),
+    }
+
+
+def _executed_intervention(entry: EvolutionMemoryEntry) -> dict[str, Any]:
+    model_candidate = getattr(entry, "model_candidate", None)
+    if isinstance(model_candidate, dict):
+        executed = model_candidate.get("executed_intervention")
+        if isinstance(executed, dict):
+            raw_targeted = executed.get("targeted_tasks", [])
+            raw_repaired = executed.get("repaired_tasks", [])
+            targeted = list(raw_targeted) if isinstance(raw_targeted, list) else []
+            repaired = list(raw_repaired) if isinstance(raw_repaired, list) else []
+            training = executed.get("training")
+            return {
+                "type": "model_adapter",
+                "targeted_task_count": len(targeted),
+                "targeted_tasks": targeted[:12],
+                "repaired_task_count": len(repaired),
+                "repaired_tasks": repaired[:12],
+                "repair_attempts": executed.get("repair_attempts", 0),
+                "repair_guidance": str(executed.get("repair_guidance", ""))[:1000],
+                "training": (
+                    {
+                        key: training.get(key)
+                        for key in (
+                            "epochs",
+                            "max_length",
+                            "lora_rank",
+                            "learning_rate",
+                        )
+                    }
+                    if isinstance(training, dict)
+                    else None
+                ),
+            }
+        return {"type": "model_adapter"}
+
+    context_candidate = getattr(entry, "context_candidate", None)
+    if isinstance(context_candidate, dict):
+        return {
+            "type": "context_profile",
+            "system_prompt_addendum": str(
+                context_candidate.get("system_prompt_addendum", "")
+            )[:1000],
+            "task_prompt_addendum": str(
+                context_candidate.get("task_prompt_addendum", "")
+            )[:1000],
+        }
+
+    tool_candidate = getattr(entry, "tool_candidate", None)
+    if isinstance(tool_candidate, dict):
+        addenda = tool_candidate.get("description_addenda", {})
+        return {
+            "type": "tool_profile",
+            "description_addenda": (
+                {
+                    str(name): str(text)[:500]
+                    for name, text in list(addenda.items())[:8]
+                }
+                if isinstance(addenda, dict)
+                else {}
+            ),
+        }
+
+    changed_paths = list(getattr(entry, "changed_paths", []))
+    if changed_paths:
+        return {
+            "type": "source_patch",
+            "changed_paths": changed_paths,
+            "patch_excerpt": str(getattr(entry, "patch_excerpt", ""))[:1000],
+        }
+    return {"type": "none"}
 
 
 def plan_evolution(

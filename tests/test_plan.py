@@ -85,6 +85,13 @@ class EvolutionPlanTests(unittest.TestCase):
                     intervention_verdict="failed",
                     intervention_evidence=["candidate failed validation"],
                 ),
+                model_candidate={
+                    "executed_intervention": {
+                        "targeted_tasks": ["task/1"],
+                        "repair_guidance": "repair incorrect artifact handling",
+                        "repaired_tasks": [],
+                    }
+                },
                 to_context_dict=lambda: {"generation": 1},
             )
         ]
@@ -99,9 +106,74 @@ class EvolutionPlanTests(unittest.TestCase):
         request = model.requests[0][1].content
         self.assertIn('"failed_interventions"', request)
         self.assertIn('"hypothesis": "artifact persistence is unreliable"', request)
-        self.assertIn('"intervention": "rewrite the agent loop"', request)
+        self.assertIn('"planned_intervention": "rewrite the agent loop"', request)
+        self.assertIn('"execution_history"', request)
+        self.assertIn('"type": "model_adapter"', request)
+        self.assertIn('"targeted_tasks": [', request)
+        self.assertIn('"task/1"', request)
+        self.assertIn('"repair incorrect artifact handling"', request)
         self.assertIn('"verdict": "failed"', request)
         self.assertIn('"candidate failed validation"', request)
+
+    def test_execution_history_describes_source_context_and_tool_actions(self):
+        model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
+        outcome = SimpleNamespace(
+            hypothesis_verdict="untested",
+            counterevidence=[],
+            intervention_verdict="effective",
+            intervention_evidence=["candidate improved"],
+        )
+        history = [
+            SimpleNamespace(
+                generation=1,
+                decision="accepted",
+                outcome_type="accepted",
+                plan={"primary_layer": "architecture", "intervention": "change loop"},
+                outcome=outcome,
+                changed_paths=["src/tinyagent/agent.py"],
+                patch_excerpt="+ validate completion",
+                to_context_dict=lambda: {"generation": 1},
+            ),
+            SimpleNamespace(
+                generation=2,
+                decision="accepted",
+                outcome_type="accepted",
+                plan={"primary_layer": "context", "intervention": "clarify prompt"},
+                outcome=outcome,
+                context_candidate={
+                    "system_prompt_addendum": "Verify the required artifact.",
+                    "task_prompt_addendum": "",
+                },
+                to_context_dict=lambda: {"generation": 2},
+            ),
+            SimpleNamespace(
+                generation=3,
+                decision="accepted",
+                outcome_type="accepted",
+                plan={"primary_layer": "tools", "intervention": "clarify write tool"},
+                outcome=outcome,
+                tool_candidate={
+                    "description_addenda": {
+                        "write_file": "Confirm that the requested path was written."
+                    }
+                },
+                to_context_dict=lambda: {"generation": 3},
+            ),
+        ]
+
+        EvolutionPlanner(model).create_plan(
+            self._diagnosis(),
+            self._parent(),
+            history,
+            mutable_paths=["src/tinyagent"],
+        )
+
+        request = model.requests[0][1].content
+        self.assertIn('"type": "source_patch"', request)
+        self.assertIn('"type": "context_profile"', request)
+        self.assertIn('"type": "tool_profile"', request)
+        self.assertIn('"src/tinyagent/agent.py"', request)
+        self.assertIn('"write_file"', request)
 
     def test_likely_files_must_be_inside_mutable_paths(self):
         invalid = self._plan()
