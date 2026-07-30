@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from .diagnosis import Diagnosis
 from .evaluation import BenchmarkEvaluator
+from .plan import EvolutionPlan
 from .repair import RepairCollection, collect_failed_task_repairs
 from .types import EvaluationReport, EvolutionConfig
 
@@ -143,18 +145,23 @@ def evolve_model(
     *,
     parent_model: str,
     parent_adapter: dict[str, Any] | None,
+    diagnosis: Diagnosis,
+    plan: EvolutionPlan,
     runtime: AdapterRuntime | None = None,
 ) -> ModelEvolutionResult:
     """Train, load, evaluate, and either retain or remove one LoRA candidate."""
     runtime = runtime or VLLMAdapterRuntime(config.base_url)
     model_dir = generation_dir / "model"
     data_path = model_dir / "verified_trajectories.jsonl"
+    guidance = _repair_guidance(diagnosis, plan)
     print("[evolution] collecting verifier-guided repairs for failed tasks", flush=True)
     repairs = collect_failed_task_repairs(
         config,
         parent_report.output_dir,
         model_dir / "repairs",
         model_name=parent_model,
+        task_ids=set(diagnosis.affected_tasks),
+        guidance=guidance,
     )
     training_data = build_training_dataset(
         parent_report.output_dir,
@@ -183,12 +190,29 @@ def evolve_model(
         "training_data": str(data_path),
         "repair_collection": repairs.to_dict(),
         "training_dataset": training_data,
+        "planned_intervention": {
+            "affected_tasks": diagnosis.affected_tasks,
+            "hypothesis": plan.hypothesis,
+            "intervention": plan.intervention,
+        },
+        "executed_intervention": {
+            "targeted_tasks": repairs.failed_tasks,
+            "repair_guidance": guidance,
+            "repair_attempts": repairs.attempts,
+            "repaired_tasks": repairs.repaired_tasks,
+            "training": None,
+        },
     }
     if not training_data["repair_examples"]:
+        reason = (
+            "selected plan affected no failed task"
+            if not repairs.failed_tasks
+            else "no selected failed task produced a verifier-passing repair trajectory"
+        )
         return ModelEvolutionResult(
             "rejected",
             "model_training_skipped",
-            "no failed task produced a verifier-passing repair trajectory",
+            reason,
             None,
             None,
             candidate,
@@ -204,6 +228,7 @@ def evolve_model(
         "lora_rank": config.sft_lora_rank,
         "learning_rate": config.sft_learning_rate,
     }
+    candidate["executed_intervention"]["training"] = train_config
     train_config_path = model_dir / "train_config.json"
     model_dir.mkdir(parents=True, exist_ok=True)
     train_config_path.write_text(
@@ -296,6 +321,16 @@ def evolve_model(
         confirmed,
         fresh_parent,
         candidate,
+    )
+
+
+def _repair_guidance(diagnosis: Diagnosis, plan: EvolutionPlan) -> str:
+    return "\n".join(
+        [
+            f"Diagnosed problem: {diagnosis.problem}",
+            f"Causal hypothesis: {plan.hypothesis}",
+            f"Planned intervention: {plan.intervention}",
+        ]
     )
 
 

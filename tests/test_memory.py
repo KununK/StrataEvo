@@ -124,6 +124,14 @@ class EvolutionMemoryTests(unittest.TestCase):
     def test_context_preserves_model_repair_and_task_changes(self):
         entry = self._entry(1, "model", "rejected")
         entry.model_candidate = {
+            "planned_intervention": {
+                "hypothesis": "repair contract failures",
+                "intervention": "train on selected verified repairs",
+            },
+            "executed_intervention": {
+                "targeted_tasks": ["task/fixed"],
+                "repaired_tasks": ["task/fixed"],
+            },
             "repair_collection": {
                 "repaired_tasks": ["task/fixed"],
                 "still_failed_tasks": ["task/failed"],
@@ -141,6 +149,10 @@ class EvolutionMemoryTests(unittest.TestCase):
         self.assertEqual(
             candidate["screening_task_changes"]["regressed_tasks"],
             ["task/regressed"],
+        )
+        self.assertEqual(
+            candidate["executed_intervention"]["targeted_tasks"],
+            ["task/fixed"],
         )
 
     def test_old_entry_derives_outcome_summary(self):

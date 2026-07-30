@@ -287,6 +287,9 @@ def run_one_generation(config_path: Path) -> int:
             _print_generation(record)
             return 0
         if plan_report.plan.primary_layer.value == "model" and config.model_evolution:
+            selected_diagnosis = diagnosis.diagnoses[
+                plan_report.plan.target_diagnosis
+            ]
             model_result = evolve_model(
                 config,
                 generation,
@@ -295,6 +298,8 @@ def run_one_generation(config_path: Path) -> int:
                 evaluator,
                 parent_model=str(state.get("current_model", config.model)),
                 parent_adapter=state.get("current_adapter"),
+                diagnosis=selected_diagnosis,
+                plan=plan_report.plan,
             )
             if model_result.decision == "accepted":
                 state["current_model"] = model_result.candidate["name"]

@@ -48,8 +48,10 @@ def collect_failed_task_repairs(
     *,
     model_name: str,
     model: Model | None = None,
+    task_ids: set[str] | None = None,
+    guidance: str = "",
 ) -> RepairCollection:
-    """Retry every failed task and retain attempts accepted by its benchmark verifier."""
+    """Retry selected failed tasks and retain attempts accepted by their verifier."""
     source = Path(evaluation_dir)
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -58,6 +60,7 @@ def collect_failed_task_repairs(
         str(row["task_id"]): row
         for row in results
         if not row.get("passed", row.get("status") == "pass")
+        and (task_ids is None or str(row["task_id"]) in task_ids)
     }
     if not failed:
         collection = RepairCollection([], [], [], 0, 0, str(destination))
@@ -98,6 +101,7 @@ def collect_failed_task_repairs(
                     render_task,
                     verify,
                     config,
+                    guidance,
                 )
                 futures[future] = (task_id, attempt)
         for future in as_completed(futures):
@@ -137,6 +141,7 @@ def _repair_once(
     render_task: Callable[[dict[str, Any]], str],
     verify: Callable[[dict[str, Any], str, float], dict[str, Any]],
     config: EvolutionConfig,
+    guidance: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     task_id = str(task["task_id"])
     previous_path = failure.get("candidate_path")
@@ -163,7 +168,11 @@ def _repair_once(
         max_steps=config.benchmark_max_steps,
         test_timeout=config.test_timeout,
         system_prompt=REPAIR_SYSTEM_PROMPT,
-        user_prompt=REPAIR_USER_PROMPT,
+        user_prompt=(
+            f"{REPAIR_USER_PROMPT}\n\nEvolution guidance:\n{guidance}"
+            if guidance
+            else REPAIR_USER_PROMPT
+        ),
         extra_files={
             "previous_solution.py": previous or "# No previous solution was produced.\n",
             "failure.txt": feedback,

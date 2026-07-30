@@ -6,11 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from strataevo.evolution.diagnosis import Diagnosis, EvolutionLayer
 from strataevo.evolution.model_evolution import (
     build_training_dataset,
     evolve_model,
     task_changes,
 )
+from strataevo.evolution.plan import EvolutionPlan, ExpectedOutcome, MetricDirection
 from strataevo.evolution.repair import (
     RepairCollection,
     _benchmark_adapter,
@@ -111,6 +113,7 @@ class ModelEvolutionTests(unittest.TestCase):
             ]
             evaluator = FakeEvaluator(reports)
             runtime = FakeRuntime()
+            diagnosis, plan = self._model_direction()
 
             repairs = RepairCollection(
                 failed_tasks=["failed"],
@@ -148,6 +151,8 @@ class ModelEvolutionTests(unittest.TestCase):
                         "path": str(root / "parent-adapter"),
                     },
                     runtime=runtime,
+                    diagnosis=diagnosis,
+                    plan=plan,
                 )
 
             self.assertEqual(result.decision, "accepted")
@@ -160,6 +165,18 @@ class ModelEvolutionTests(unittest.TestCase):
             self.assertEqual(evaluator.models[-1], result.candidate["name"])
             self.assertEqual(runtime.events[-1][0], "activate")
             self.assertEqual(runtime.events[0], ("deactivate", "parent-adapter"))
+            self.assertEqual(
+                result.candidate["planned_intervention"]["affected_tasks"],
+                ["failed"],
+            )
+            self.assertEqual(
+                result.candidate["executed_intervention"]["targeted_tasks"],
+                ["failed"],
+            )
+            self.assertEqual(
+                result.candidate["executed_intervention"]["training"]["epochs"],
+                1,
+            )
             train_config = json.loads(
                 (
                     root / "generation-0001/model/train_config.json"
@@ -226,7 +243,10 @@ class ModelEvolutionTests(unittest.TestCase):
             evaluation.mkdir()
             self._write_jsonl(
                 evaluation / "results.jsonl",
-                [{"task_id": "task", "passed": False, "status": "assertion_error"}],
+                [
+                    {"task_id": "task", "passed": False, "status": "assertion_error"},
+                    {"task_id": "other", "passed": False, "status": "assertion_error"},
+                ],
             )
             model = ScriptedModel(
                 [
@@ -251,7 +271,10 @@ class ModelEvolutionTests(unittest.TestCase):
                 eval_workers=1,
             )
             adapter = (
-                [{"task_id": "task", "prompt": "repair", "entry_point": "answer"}],
+                [
+                    {"task_id": "task", "prompt": "repair", "entry_point": "answer"},
+                    {"task_id": "other", "prompt": "repair", "entry_point": "answer"},
+                ],
                 lambda _task: "def answer(): ...\n",
                 lambda _task, source, _timeout: {
                     "passed": "return 1" in source,
@@ -269,11 +292,18 @@ class ModelEvolutionTests(unittest.TestCase):
                     root / "repairs",
                     model_name="test",
                     model=model,
+                    task_ids={"task"},
+                    guidance="Focus on preserving the function contract.",
                 )
 
+            self.assertEqual(collection.failed_tasks, ["task"])
             self.assertEqual(collection.repaired_tasks, ["task"])
             self.assertEqual(collection.still_failed_tasks, [])
             self.assertEqual(collection.successful_trajectories, 1)
+            self.assertIn(
+                "Focus on preserving the function contract.",
+                model.requests[0][1].content,
+            )
 
     def test_repair_adapter_reuses_saved_task_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -338,6 +368,36 @@ class ModelEvolutionTests(unittest.TestCase):
             "".join(json.dumps(row) + "\n" for row in rows),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _model_direction():
+        diagnosis = Diagnosis(
+            primary_layer=EvolutionLayer.MODEL,
+            related_layers=[],
+            problem="The model violates the requested function contract.",
+            evidence=["failed did not satisfy the verifier"],
+            affected_tasks=["failed"],
+            proposed_direction="Improve contract-aware reasoning.",
+            confidence=0.8,
+        )
+        plan = EvolutionPlan(
+            target_diagnosis=0,
+            primary_layer=EvolutionLayer.MODEL,
+            hypothesis="Contract-aware repair trajectories improve task success.",
+            intervention="Train on verified repairs for the affected failed tasks.",
+            expected_outcomes=[
+                ExpectedOutcome(
+                    "task_score",
+                    MetricDirection.INCREASE,
+                    "The selected failures should be repaired.",
+                )
+            ],
+            likely_files=[],
+            expected_long_term_value="Improve related coding tasks.",
+            prerequisites=[],
+            confidence=0.8,
+        )
+        return diagnosis, plan
 
 
 if __name__ == "__main__":
