@@ -10,6 +10,7 @@ from .contract import ChangeImpact
 from .evaluation import Evaluator, run_commands
 from .git import GitRepository
 from .io import write_json
+from .semantics import classify_changes
 from .types import EvaluationReport
 
 
@@ -23,6 +24,7 @@ class EvaluationAttempt:
     validation_log: str | None
     report: dict | None
     change_impact: dict | None
+    change_semantics: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -121,6 +123,25 @@ class CandidateEvaluationSession:
         patch_path = attempt_dir / "changes.patch"
         patch_path.write_text(patch, encoding="utf-8")
         impact = self.evaluator.contract.classify(changed_paths)
+        semantics = classify_changes(self.repo, changed_paths, self.git.head_text)
+        if semantics.classification == "semantic_noop":
+            attempt = EvaluationAttempt(
+                number,
+                "semantic_noop",
+                "candidate changes only comments, formatting, or equivalent structured data",
+                changed_paths,
+                str(patch_path),
+                None,
+                None,
+                impact.to_dict(),
+                semantics.to_dict(),
+            )
+            self._restore(self._best_improving_attempt())
+            return self._finish_attempt(
+                attempt,
+                candidate_retained=False,
+                working_tree_state=self._working_tree_state,
+            )
         scope_error = _scope_error(impact)
         if scope_error:
             attempt = EvaluationAttempt(
@@ -132,6 +153,7 @@ class CandidateEvaluationSession:
                 None,
                 None,
                 impact.to_dict(),
+                semantics.to_dict(),
             )
             self._restore(self._best_improving_attempt())
             return self._finish_attempt(
@@ -161,6 +183,7 @@ class CandidateEvaluationSession:
                 str(validation_log),
                 None,
                 impact.to_dict(),
+                semantics.to_dict(),
             )
             return self._finish_attempt(
                 attempt,
@@ -185,6 +208,7 @@ class CandidateEvaluationSession:
                 str(validation_log),
                 None,
                 impact.to_dict(),
+                semantics.to_dict(),
             )
             return self._finish_attempt(
                 attempt,
@@ -213,6 +237,7 @@ class CandidateEvaluationSession:
             str(validation_log),
             report.to_dict(),
             impact.to_dict(),
+            semantics.to_dict(),
         )
         if regressed:
             self._restore(restore_attempt)
@@ -314,6 +339,11 @@ class CandidateEvaluationSession:
                 f"No submitted patch is active; the working tree contains "
                 f"the {working_tree_state.replace('_', ' ')}."
             )
+        elif attempt.outcome_type == "semantic_noop":
+            tree_instruction = (
+                "The submitted patch was discarded because it has no detectable semantic change; "
+                f"the working tree now contains the {working_tree_state.replace('_', ' ')}."
+            )
         elif candidate_retained:
             tree_instruction = "The submitted patch remains in the working tree."
         else:
@@ -330,6 +360,8 @@ class CandidateEvaluationSession:
                 "This patch cannot be attributed to the active benchmark. Make one focused change "
                 "only under its direct_paths, or stop."
             )
+        elif attempt.outcome_type == "semantic_noop":
+            next_action = "Make a focused behavioral change before requesting another check."
         elif attempt.outcome_type == "validation_failed":
             next_action = (
                 "Correct the reported validation errors before requesting another check. "

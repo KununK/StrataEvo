@@ -220,6 +220,17 @@ class EvolutionPlanner:
             },
             "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(history or [], max_chars=12_000),
+            "refuted_hypotheses": [
+                {
+                    "generation": entry.generation,
+                    "layer": entry.plan.get("primary_layer"),
+                    "hypothesis": entry.plan.get("hypothesis"),
+                    "intervention": entry.plan.get("intervention"),
+                    "counterevidence": entry.outcome.counterevidence,
+                }
+                for entry in history or []
+                if entry.outcome.hypothesis_verdict == "refuted"
+            ],
         }
         messages = [
             Message("system", PLANNER_SYSTEM_PROMPT),
@@ -260,6 +271,8 @@ Select exactly one supplied diagnosis. Prefer a direction supported by concrete 
 already disproven by prior evolution, and likely to produce a measurable improvement without
 regressing task quality. A rejected prior attempt does not prove the whole direction is useless,
 but repeating the same intervention requires new evidence or a materially different mechanism.
+The refuted_hypotheses list is explicit counterevidence. Do not repeat one of those hypotheses
+with the same mechanism unless the current diagnosis supplies concrete new evidence.
 Treat prior outcome_type=no_change or validation_failed as an execution failure, not benchmark
 evidence against its hypothesis. Use those records to choose a more executable intervention.
 Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluation-contract

@@ -19,6 +19,7 @@ from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .model_evolution import activate_saved_adapter, evolve_model
 from .mutator import mutate
 from .plan import EvolutionPlanReport, plan_evolution
+from .run_summary import write_run_summary
 from .tool_evolution import evolve_tools
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
 
@@ -148,6 +149,7 @@ def run_one_generation(config_path: Path) -> int:
     evaluator = create_evaluator(repo, config)
     write_json(run_dir / "evaluation_contract.json", evaluator.contract.to_dict())
     state = _load_or_create_state(state_path, git, evaluator, run_dir, config.model)
+    write_run_summary(run_dir, memory.load(), state)
     if config.model_evolution:
         activate_saved_adapter(config, evaluator, state.get("current_adapter"))
     if state.get("current_context"):
@@ -615,6 +617,7 @@ def _finish_generation(
     )
     state["next_generation"] = record.generation + 1
     write_json(state_path, state)
+    write_run_summary(state_path.parent, memory.load(), state)
 
 
 def _validate_args(args: argparse.Namespace) -> None:

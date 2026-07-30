@@ -241,6 +241,46 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(feedback["evaluations_remaining"], 0)
             self.assertEqual(len(session.attempts), 2)
 
+    def test_semantic_noop_is_rejected_without_validation_or_benchmark(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src/tinyagent"
+            source.mkdir(parents=True)
+            agent_file = source / "agent.py"
+            agent_file.write_text("VALUE = 1\n", encoding="utf-8")
+            self._git(root, "init", "-b", "main")
+            self._git(root, "config", "user.name", "test")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "baseline")
+
+            class FakeEvaluator:
+                contract = TEST_CONTRACT
+
+                def evaluate(self, _output_dir):
+                    raise AssertionError("semantic no-op must not be benchmarked")
+
+            attempts = root / "attempts"
+            attempts.mkdir()
+            session = CandidateEvaluationSession(
+                root,
+                GitRepository(root, ["src/tinyagent"]),
+                FakeEvaluator(),
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
+                attempts,
+                [["validate"]],
+                1,
+            )
+            agent_file.write_text("# comment\nVALUE=1\n", encoding="utf-8")
+
+            with patch("strataevo.evolution.attempts.run_commands") as validate:
+                feedback = json.loads(session.evaluate())
+
+            validate.assert_not_called()
+            self.assertEqual(feedback["outcome_type"], "semantic_noop")
+            self.assertEqual(session.evaluations_used, 0)
+            self.assertEqual(agent_file.read_text(encoding="utf-8"), "VALUE = 1\n")
+
     def test_regression_restores_best_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

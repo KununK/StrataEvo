@@ -21,6 +21,7 @@ TASK_CONTEXT_LIMIT = 12
 TEXT_CONTEXT_CHARS = 500
 EVOLUTION_LAYERS = {"model", "context", "tools", "architecture"}
 OUTCOME_STATUSES = {"supported", "regressed", "no_measured_gain", "not_evaluated"}
+HYPOTHESIS_VERDICTS = {"supported", "refuted", "untested"}
 
 
 @dataclass(slots=True)
@@ -59,11 +60,18 @@ class MemoryOutcome:
     remaining_failures: list[str]
     summary: str
     next_step: str
+    hypothesis_verdict: str = "untested"
+    counterevidence: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MemoryOutcome:
+        status = str(data["status"])
+        verdict = str(data.get("hypothesis_verdict", _legacy_verdict(status)))
+        raw_counterevidence = data.get("counterevidence")
+        if raw_counterevidence is None:
+            raw_counterevidence = [str(data["summary"])] if verdict == "refuted" else []
         outcome = cls(
-            status=str(data["status"]),
+            status=status,
             score_delta=(
                 float(data["score_delta"]) if data.get("score_delta") is not None else None
             ),
@@ -74,9 +82,15 @@ class MemoryOutcome:
             ),
             summary=str(data["summary"]),
             next_step=str(data["next_step"]),
+            hypothesis_verdict=verdict,
+            counterevidence=_string_list(raw_counterevidence, "counterevidence"),
         )
         if outcome.status not in OUTCOME_STATUSES:
             raise ValueError(f"invalid memory outcome status: {outcome.status}")
+        if outcome.hypothesis_verdict not in HYPOTHESIS_VERDICTS:
+            raise ValueError(
+                f"invalid memory hypothesis verdict: {outcome.hypothesis_verdict}"
+            )
         return outcome
 
     def to_context_dict(self) -> dict[str, Any]:
@@ -88,6 +102,10 @@ class MemoryOutcome:
             "remaining_failures": _task_context(self.remaining_failures),
             "summary": self.summary[:TEXT_CONTEXT_CHARS],
             "next_step": self.next_step[:TEXT_CONTEXT_CHARS],
+            "hypothesis_verdict": self.hypothesis_verdict,
+            "counterevidence": [
+                item[:TEXT_CONTEXT_CHARS] for item in self.counterevidence[:4]
+            ],
         }
 
 
@@ -202,6 +220,7 @@ class EvolutionMemoryEntry:
             "unclassified_change",
             "benchmark_rejected",
             "model_training_skipped",
+            "semantic_noop",
         }:
             raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
         return entry
@@ -383,6 +402,13 @@ def _summarize_generation(
         outcome.fixed_tasks = transitions["fixed_tasks"]
         outcome.regressed_tasks = transitions["regressed_tasks"]
         outcome.remaining_failures = transitions["remaining_failures"]
+        if outcome.hypothesis_verdict == "refuted":
+            if outcome.regressed_tasks:
+                outcome.counterevidence.append(
+                    f"Regressed {len(outcome.regressed_tasks)} previously passing tasks."
+                )
+            if not outcome.fixed_tasks:
+                outcome.counterevidence.append("No failing task was fixed in the comparison.")
     return outcome
 
 
@@ -399,14 +425,20 @@ def _summarize_outcome(values: dict[str, Any]) -> MemoryOutcome:
     reason = str(values.get("reason", "")).strip()
     if decision == "accepted":
         status = "supported"
+        verdict = "supported"
+        counterevidence = []
         summary = f"The intervention was accepted with task-score delta {_format_delta(delta)}."
         next_step = "Retain this change and build on the evidence that it improved the benchmark."
     elif outcome_type == "benchmark_rejected" and delta is not None and delta < 0:
         status = "regressed"
+        verdict = "refuted"
+        counterevidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
         summary = f"The evaluated intervention regressed by {_format_delta(delta)}."
         next_step = "Do not repeat this intervention unchanged; revise its causal hypothesis."
     elif outcome_type == "benchmark_rejected" and delta is not None:
         status = "no_measured_gain"
+        verdict = "refuted"
+        counterevidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
         summary = (
             f"The evaluated intervention produced no promotable gain ({_format_delta(delta)})."
         )
@@ -415,11 +447,23 @@ def _summarize_outcome(values: dict[str, Any]) -> MemoryOutcome:
         )
     else:
         status = "not_evaluated"
+        verdict = "untested"
+        counterevidence = []
         summary = f"The hypothesis was not tested successfully: {reason or outcome_type}."
         next_step = (
             "Resolve the execution failure before treating it as evidence about the hypothesis."
         )
-    return MemoryOutcome(status, delta, [], [], [], summary, next_step)
+    return MemoryOutcome(
+        status,
+        delta,
+        [],
+        [],
+        [],
+        summary,
+        next_step,
+        verdict,
+        counterevidence,
+    )
 
 
 def _task_transitions(
@@ -495,6 +539,14 @@ def _format_delta(delta: float | None) -> str:
 def _validate_limit(limit: int) -> None:
     if limit <= 0:
         raise ValueError("memory context limit must be positive")
+
+
+def _legacy_verdict(status: str) -> str:
+    if status == "supported":
+        return "supported"
+    if status in {"regressed", "no_measured_gain"}:
+        return "refuted"
+    return "untested"
 
 
 def _legacy_outcome_type(decision: Any, reason: Any) -> str:

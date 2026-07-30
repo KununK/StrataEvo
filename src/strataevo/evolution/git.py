@@ -56,6 +56,20 @@ class GitRepository:
     def staged_diff(self) -> str:
         return self._run(["diff", "--cached", "--binary", "--", *self.mutable_paths], capture=True)
 
+    def head_text(self, path: str) -> str | None:
+        completed = subprocess.run(
+            ["git", "show", f"HEAD:{path}"],
+            cwd=self.root,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        try:
+            return completed.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
     def commit(self, message: str) -> str:
         self._run(["commit", "-m", message])
         return self.head()

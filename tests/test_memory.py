@@ -94,9 +94,32 @@ class EvolutionMemoryTests(unittest.TestCase):
         self.assertEqual(context["selected_diagnosis"]["problem"], "test problem")
         self.assertEqual(context["action"]["primary_layer"], "tools")
         self.assertEqual(context["outcome"]["status"], "regressed")
+        self.assertEqual(context["outcome"]["hypothesis_verdict"], "untested")
         self.assertEqual(context["outcome"]["remaining_failures"]["count"], 20)
         self.assertEqual(len(context["outcome"]["remaining_failures"]["examples"]), 12)
         self.assertNotIn("agent_output", context)
+
+    def test_rejected_benchmark_records_explicit_counterevidence(self):
+        entry = self._entry(1, "architecture", "rejected")
+        entry.outcome = MemoryOutcome(
+            status="regressed",
+            score_delta=-0.1,
+            fixed_tasks=[],
+            regressed_tasks=["task/2"],
+            remaining_failures=["task/1"],
+            summary="The intervention regressed.",
+            next_step="Revise the hypothesis.",
+            hypothesis_verdict="refuted",
+            counterevidence=["Candidate task-score delta was -0.100000."],
+        )
+
+        outcome = entry.to_context_dict()["outcome"]
+
+        self.assertEqual(outcome["hypothesis_verdict"], "refuted")
+        self.assertEqual(
+            outcome["counterevidence"],
+            ["Candidate task-score delta was -0.100000."],
+        )
 
     def test_context_preserves_model_repair_and_task_changes(self):
         entry = self._entry(1, "model", "rejected")
@@ -130,6 +153,26 @@ class EvolutionMemoryTests(unittest.TestCase):
 
         self.assertEqual(loaded.outcome.status, "regressed")
         self.assertAlmostEqual(loaded.outcome.score_delta or 0.0, -0.1)
+
+    def test_legacy_outcome_derives_hypothesis_verdict(self):
+        data = self._entry(1, "architecture", "rejected").to_dict()
+        data["outcome"] = {
+            "status": "regressed",
+            "score_delta": -0.1,
+            "fixed_tasks": [],
+            "regressed_tasks": [],
+            "remaining_failures": [],
+            "summary": "The intervention regressed.",
+            "next_step": "Revise it.",
+        }
+
+        loaded = EvolutionMemoryEntry.from_dict(data)
+
+        self.assertEqual(loaded.outcome.hypothesis_verdict, "refuted")
+        self.assertEqual(
+            loaded.outcome.counterevidence,
+            ["The intervention regressed."],
+        )
 
     def test_task_transitions_are_read_from_generic_results(self):
         with tempfile.TemporaryDirectory() as directory:

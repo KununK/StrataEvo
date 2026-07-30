@@ -150,7 +150,9 @@ Meta-Agent 读取父代的评测摘要、失败轨迹和当前实现，然后选
 round。每轮 step 上限根据剩余总预算和剩余 round 数动态均分。默认 200 steps、5 rounds
 时初始上限为每轮 40；如果某轮提前结束，未使用的预算会滚入后续轮次。每轮结束后控制器
 自动检查当前 diff，并把验证或 benchmark 结果追加到同一个 session 后再启动下一轮；模型
-主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。
+主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。Python
+注释/格式变化以及结构等价的 JSON/TOML 会被保守识别为 `semantic_noop`，恢复父代或已有
+最佳候选，且不运行固定验证、不消耗 benchmark 配额。无法证明等价的修改仍按正常候选评测。
 每条候选反馈都会返回 `candidate_retained` 和 `working_tree_state`。前者说明刚提交的 patch
 是否仍然生效，后者明确当前工作树是 `current_candidate`、`best_candidate` 还是 `parent`。
 如果候选因重复失败、范围越界或分数退化而被恢复，下一轮必须以该状态为准，不能把父代随后
@@ -226,6 +228,8 @@ evolution/runs/<run_name>/
 ├── evaluation_contract.json
 ├── state.json
 ├── evolution_memory.jsonl
+├── summary.json
+├── summary.md
 ├── baseline/
 ├── generation-0001/
 │   ├── diagnosis.json
@@ -265,6 +269,7 @@ evolution/runs/<run_name>/
 - `evaluation_contract.json`：当前 benchmark 的目标、直接生效路径和延迟生效路径；
 - `state.json`：当前代数、当前提交、已激活模型/context 和父代评分；
 - `evolution_memory.jsonl`：所有已完成代的诊断、修改、指标和接受/拒绝结果；
+- `summary.json`、`summary.md`：自动更新的 run-level 四层选择、结果和分数汇总；
 - `diagnosis.json`：本代主要演化层、关联层、证据、置信度和改进方向；
 - `plan.json`：从诊断中选中的单一问题、干预、预期指标和长期价值假设；
 - `agent_result.json`：自修改 Agent 的完整消息与工具轨迹；
@@ -419,6 +424,7 @@ ToolProfile 与 ContextProfile 共用候选评测事务：screening 通过后进
 generation、diagnoses、plan、expected outcome observations
 changed_paths、patch path / excerpt、agent_output
 父代和候选的 task score
+hypothesis_verdict、counterevidence 和后续建议
 accepted / rejected、原因和 resulting commit
 ```
 
@@ -426,6 +432,7 @@ accepted / rejected、原因和 resulting commit
 
 ```text
 no_change          自修改执行没有产生源码 diff，尚未检验演化假设
+semantic_noop       仅产生可证明的注释、格式或结构等价修改，尚未检验演化假设
 validation_failed  产生了 diff，但固定代码检查失败，尚未进入任务评测
 deferred_change    修改只会影响后续自进化，当前 benchmark 无法评价
 mixed_change_scope 同时修改直接与延迟生效代码，无法归因
@@ -435,7 +442,8 @@ accepted           通过固定检查和任务评测并已提交
 ```
 
 Planner 会把没有进入 benchmark 的结果视为执行或评测契约不匹配，而不是该演化方向已经被
-基准否定。
+基准否定。进入 benchmark 但未晋级的假设会标为 `refuted`，并将分数变化和任务退化写入
+`counterevidence`；Planner 只有在出现新证据或不同机制时才应再次选择相同假设。
 
 Diagnosis 会读取最近的历史结果，避免在证据没有变化时反复提出已被拒绝的假设。自修改
 执行器会优先读取与本次主要层或关联层匹配的历史，同时补充最近的其他记录。历史只作为

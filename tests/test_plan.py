@@ -1,5 +1,6 @@
 import json
 import unittest
+from types import SimpleNamespace
 
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.plan import (
@@ -34,6 +35,37 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertIn('"src/tinyagent/workspace.py"', request)
         self.assertIn('"requires_strict_improvement": true', request)
         self.assertIn('"parent_task_score": 0.5', request)
+
+    def test_planner_receives_explicit_refuted_hypotheses(self):
+        model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
+        history = [
+            SimpleNamespace(
+                generation=1,
+                plan={
+                    "primary_layer": "architecture",
+                    "hypothesis": "old hypothesis",
+                    "intervention": "old mechanism",
+                },
+                outcome=SimpleNamespace(
+                    hypothesis_verdict="refuted",
+                    counterevidence=["task score regressed"],
+                ),
+                to_context_dict=lambda: {"generation": 1},
+            )
+        ]
+
+        EvolutionPlanner(model).create_plan(
+            self._diagnosis(),
+            self._parent(),
+            history,
+            mutable_paths=["src/tinyagent"],
+        )
+
+        request = model.requests[0][1].content
+        self.assertIn('"refuted_hypotheses"', request)
+        self.assertIn('"hypothesis": "old hypothesis"', request)
+        self.assertIn('"counterevidence": [', request)
+        self.assertIn('"task score regressed"', request)
 
     def test_likely_files_must_be_inside_mutable_paths(self):
         invalid = self._plan()
