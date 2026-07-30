@@ -49,9 +49,11 @@ def _generation_summary(entry: EvolutionMemoryEntry) -> dict[str, Any]:
         "planned_layer": entry.plan.get("primary_layer"),
         "candidate_type": _candidate_type(entry),
         "hypothesis": entry.plan.get("hypothesis"),
+        "intervention": entry.plan.get("intervention"),
         "decision": entry.decision,
         "outcome_type": entry.outcome_type,
         "hypothesis_verdict": entry.outcome.hypothesis_verdict,
+        "intervention_verdict": entry.outcome.intervention_verdict,
         "parent_task_score": entry.parent_task_score,
         "candidate_task_score": entry.candidate_task_score,
         "score_delta": entry.outcome.score_delta,
@@ -73,13 +75,15 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Planned layers: `{summary['planned_layers']}`",
         f"- Decisions: `{summary['decisions']}`",
         "",
-        "| Generation | Layer | Hypothesis | Decision | Outcome | Verdict | Parent | Candidate |",
-        "| ---: | --- | --- | --- | --- | --- | ---: | ---: |",
+        "| Generation | Layer | Hypothesis | Intervention | Decision | Outcome | "
+        "H verdict | I verdict | Parent | Candidate |",
+        "| ---: | --- | --- | --- | --- | --- | --- | --- | ---: | ---: |",
     ]
     for item in summary["generations"]:
         rows.append(
             f"| {item['generation']} | {item['planned_layer']} | {_cell(item['hypothesis'])} | "
-            f"{item['decision']} | {item['outcome_type']} | {item['hypothesis_verdict']} | "
+            f"{_cell(item['intervention'])} | {item['decision']} | {item['outcome_type']} | "
+            f"{item['hypothesis_verdict']} | {item['intervention_verdict']} | "
             f"{_score(item['parent_task_score'])} | {_score(item['candidate_task_score'])} |"
         )
     temporary = path.with_suffix(path.suffix + ".tmp")

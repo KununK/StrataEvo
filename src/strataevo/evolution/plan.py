@@ -231,6 +231,21 @@ class EvolutionPlanner:
                 for entry in history or []
                 if entry.outcome.hypothesis_verdict == "refuted"
             ],
+            "failed_interventions": [
+                {
+                    "generation": entry.generation,
+                    "layer": entry.plan.get("primary_layer"),
+                    "hypothesis": entry.plan.get("hypothesis"),
+                    "intervention": entry.plan.get("intervention"),
+                    "verdict": getattr(
+                        entry.outcome, "intervention_verdict", "untested"
+                    ),
+                    "evidence": getattr(entry.outcome, "intervention_evidence", []),
+                }
+                for entry in history or []
+                if getattr(entry.outcome, "intervention_verdict", "untested")
+                in {"ineffective", "failed"}
+            ],
         }
         messages = [
             Message("system", PLANNER_SYSTEM_PROMPT),
@@ -271,10 +286,11 @@ Select exactly one supplied diagnosis. Prefer a direction supported by concrete 
 already disproven by prior evolution, and likely to produce a measurable improvement without
 regressing task quality. A rejected prior attempt does not prove the whole direction is useless,
 but repeating the same intervention requires new evidence or a materially different mechanism.
-The refuted_hypotheses list is explicit counterevidence. Do not repeat one of those hypotheses
-with the same mechanism unless the current diagnosis supplies concrete new evidence.
-Treat prior outcome_type=no_change or validation_failed as an execution failure, not benchmark
-evidence against its hypothesis. Use those records to choose a more executable intervention.
+The refuted_hypotheses list is evidence against a causal hypothesis. The failed_interventions list
+is evidence that a specific action was ineffective or could not produce a valid candidate. These
+are different conclusions: an execution failure leaves its causal hypothesis open, but the failed
+intervention must not be repeated unchanged. Reuse a causal direction only through a materially
+different mechanism or when current evidence explains why the previous intervention failed.
 Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluation-contract
 mismatch: the intervention was not tested by the benchmark and must not be interpreted as a
 negative task result.

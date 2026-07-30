@@ -49,6 +49,8 @@ class EvolutionPlanTests(unittest.TestCase):
                 outcome=SimpleNamespace(
                     hypothesis_verdict="refuted",
                     counterevidence=["task score regressed"],
+                    intervention_verdict="ineffective",
+                    intervention_evidence=["candidate regressed"],
                 ),
                 to_context_dict=lambda: {"generation": 1},
             )
@@ -66,6 +68,40 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertIn('"hypothesis": "old hypothesis"', request)
         self.assertIn('"counterevidence": [', request)
         self.assertIn('"task score regressed"', request)
+
+    def test_planner_receives_failed_interventions_separately(self):
+        model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
+        history = [
+            SimpleNamespace(
+                generation=1,
+                plan={
+                    "primary_layer": "architecture",
+                    "hypothesis": "artifact persistence is unreliable",
+                    "intervention": "rewrite the agent loop",
+                },
+                outcome=SimpleNamespace(
+                    hypothesis_verdict="untested",
+                    counterevidence=[],
+                    intervention_verdict="failed",
+                    intervention_evidence=["candidate failed validation"],
+                ),
+                to_context_dict=lambda: {"generation": 1},
+            )
+        ]
+
+        EvolutionPlanner(model).create_plan(
+            self._diagnosis(),
+            self._parent(),
+            history,
+            mutable_paths=["src/tinyagent"],
+        )
+
+        request = model.requests[0][1].content
+        self.assertIn('"failed_interventions"', request)
+        self.assertIn('"hypothesis": "artifact persistence is unreliable"', request)
+        self.assertIn('"intervention": "rewrite the agent loop"', request)
+        self.assertIn('"verdict": "failed"', request)
+        self.assertIn('"candidate failed validation"', request)
 
     def test_likely_files_must_be_inside_mutable_paths(self):
         invalid = self._plan()

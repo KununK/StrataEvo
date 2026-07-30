@@ -22,6 +22,16 @@ TEXT_CONTEXT_CHARS = 500
 EVOLUTION_LAYERS = {"model", "context", "tools", "architecture"}
 OUTCOME_STATUSES = {"supported", "regressed", "no_measured_gain", "not_evaluated"}
 HYPOTHESIS_VERDICTS = {"supported", "refuted", "untested"}
+INTERVENTION_VERDICTS = {"effective", "ineffective", "failed", "untested"}
+FAILED_INTERVENTION_OUTCOMES = {
+    "deferred_change",
+    "mixed_change_scope",
+    "model_training_skipped",
+    "no_change",
+    "semantic_noop",
+    "unclassified_change",
+    "validation_failed",
+}
 
 
 @dataclass(slots=True)
@@ -62,14 +72,33 @@ class MemoryOutcome:
     next_step: str
     hypothesis_verdict: str = "untested"
     counterevidence: list[str] = field(default_factory=list)
+    intervention_verdict: str = "untested"
+    intervention_evidence: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> MemoryOutcome:
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        outcome_type: str = "",
+    ) -> MemoryOutcome:
         status = str(data["status"])
         verdict = str(data.get("hypothesis_verdict", _legacy_verdict(status)))
         raw_counterevidence = data.get("counterevidence")
         if raw_counterevidence is None:
             raw_counterevidence = [str(data["summary"])] if verdict == "refuted" else []
+        intervention_verdict = str(
+            data.get(
+                "intervention_verdict",
+                _legacy_intervention_verdict(status, outcome_type),
+            )
+        )
+        intervention_evidence = data.get("intervention_evidence")
+        if intervention_evidence is None:
+            intervention_evidence = (
+                [str(data["summary"])]
+                if intervention_verdict in {"ineffective", "failed"}
+                else []
+            )
         outcome = cls(
             status=status,
             score_delta=(
@@ -84,12 +113,20 @@ class MemoryOutcome:
             next_step=str(data["next_step"]),
             hypothesis_verdict=verdict,
             counterevidence=_string_list(raw_counterevidence, "counterevidence"),
+            intervention_verdict=intervention_verdict,
+            intervention_evidence=_string_list(
+                intervention_evidence, "intervention_evidence"
+            ),
         )
         if outcome.status not in OUTCOME_STATUSES:
             raise ValueError(f"invalid memory outcome status: {outcome.status}")
         if outcome.hypothesis_verdict not in HYPOTHESIS_VERDICTS:
             raise ValueError(
                 f"invalid memory hypothesis verdict: {outcome.hypothesis_verdict}"
+            )
+        if outcome.intervention_verdict not in INTERVENTION_VERDICTS:
+            raise ValueError(
+                f"invalid memory intervention verdict: {outcome.intervention_verdict}"
             )
         return outcome
 
@@ -105,6 +142,10 @@ class MemoryOutcome:
             "hypothesis_verdict": self.hypothesis_verdict,
             "counterevidence": [
                 item[:TEXT_CONTEXT_CHARS] for item in self.counterevidence[:4]
+            ],
+            "intervention_verdict": self.intervention_verdict,
+            "intervention_evidence": [
+                item[:TEXT_CONTEXT_CHARS] for item in self.intervention_evidence[:4]
             ],
         }
 
@@ -201,7 +242,7 @@ class EvolutionMemoryEntry:
             raise ValueError("memory evaluation_attempts must be a list of objects")
         raw_outcome = values.get("outcome")
         values["outcome"] = (
-            MemoryOutcome.from_dict(raw_outcome)
+            MemoryOutcome.from_dict(raw_outcome, str(values["outcome_type"]))
             if isinstance(raw_outcome, dict)
             else _summarize_outcome(values)
         )
@@ -427,42 +468,62 @@ def _summarize_outcome(values: dict[str, Any]) -> MemoryOutcome:
         status = "supported"
         verdict = "supported"
         counterevidence = []
+        intervention_verdict = "effective"
+        intervention_evidence = [
+            f"Accepted with candidate task-score delta {_format_delta(delta)}."
+        ]
         summary = f"The intervention was accepted with task-score delta {_format_delta(delta)}."
         next_step = "Retain this change and build on the evidence that it improved the benchmark."
     elif outcome_type == "benchmark_rejected" and delta is not None and delta < 0:
         status = "regressed"
         verdict = "refuted"
         counterevidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
+        intervention_verdict = "ineffective"
+        intervention_evidence = list(counterevidence)
         summary = f"The evaluated intervention regressed by {_format_delta(delta)}."
         next_step = "Do not repeat this intervention unchanged; revise its causal hypothesis."
     elif outcome_type == "benchmark_rejected" and delta is not None:
         status = "no_measured_gain"
         verdict = "refuted"
         counterevidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
+        intervention_verdict = "ineffective"
+        intervention_evidence = list(counterevidence)
         summary = (
             f"The evaluated intervention produced no promotable gain ({_format_delta(delta)})."
         )
         next_step = (
             "Retry this direction only with new evidence or a materially different intervention."
         )
+    elif outcome_type in FAILED_INTERVENTION_OUTCOMES:
+        status = "not_evaluated"
+        verdict = "untested"
+        counterevidence = []
+        intervention_verdict = "failed"
+        intervention_evidence = [reason or outcome_type]
+        summary = f"The hypothesis was not tested successfully: {reason or outcome_type}."
+        next_step = (
+            "Keep the causal hypothesis open, but do not repeat this failed intervention."
+        )
     else:
         status = "not_evaluated"
         verdict = "untested"
         counterevidence = []
+        intervention_verdict = "untested"
+        intervention_evidence = []
         summary = f"The hypothesis was not tested successfully: {reason or outcome_type}."
-        next_step = (
-            "Resolve the execution failure before treating it as evidence about the hypothesis."
-        )
+        next_step = "Resolve the evaluation failure before drawing a causal conclusion."
     return MemoryOutcome(
-        status,
-        delta,
-        [],
-        [],
-        [],
-        summary,
-        next_step,
-        verdict,
-        counterevidence,
+        status=status,
+        score_delta=delta,
+        fixed_tasks=[],
+        regressed_tasks=[],
+        remaining_failures=[],
+        summary=summary,
+        next_step=next_step,
+        hypothesis_verdict=verdict,
+        counterevidence=counterevidence,
+        intervention_verdict=intervention_verdict,
+        intervention_evidence=intervention_evidence,
     )
 
 
@@ -546,6 +607,16 @@ def _legacy_verdict(status: str) -> str:
         return "supported"
     if status in {"regressed", "no_measured_gain"}:
         return "refuted"
+    return "untested"
+
+
+def _legacy_intervention_verdict(status: str, outcome_type: str) -> str:
+    if status == "supported":
+        return "effective"
+    if status in {"regressed", "no_measured_gain"}:
+        return "ineffective"
+    if outcome_type in FAILED_INTERVENTION_OUTCOMES:
+        return "failed"
     return "untested"
 
 

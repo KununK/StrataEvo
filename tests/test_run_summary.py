@@ -71,7 +71,13 @@ class RunSummaryTests(unittest.TestCase):
             self.assertEqual(summary["generations"][0]["candidate_type"], "source_patch")
             self.assertEqual(summary["outcomes"], {"semantic_noop": 1})
             self.assertEqual(summary["generations"][0]["semantic_noop_attempts"], 1)
+            self.assertEqual(summary["generations"][0]["intervention"], "test intervention")
+            self.assertEqual(
+                summary["generations"][0]["intervention_verdict"],
+                "untested",
+            )
             self.assertIn("test hypothesis", (run_dir / "summary.md").read_text())
+            self.assertIn("test intervention", (run_dir / "summary.md").read_text())
 
 
 if __name__ == "__main__":

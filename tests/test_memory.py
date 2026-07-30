@@ -173,6 +173,31 @@ class EvolutionMemoryTests(unittest.TestCase):
             loaded.outcome.counterevidence,
             ["The intervention regressed."],
         )
+        self.assertEqual(loaded.outcome.intervention_verdict, "ineffective")
+
+    def test_validation_failure_rejects_intervention_but_keeps_hypothesis_open(self):
+        data = self._entry(1, "architecture", "rejected").to_dict()
+        data["outcome_type"] = "validation_failed"
+        data["outcome"] = {
+            "status": "not_evaluated",
+            "score_delta": None,
+            "fixed_tasks": [],
+            "regressed_tasks": [],
+            "remaining_failures": [],
+            "summary": "The candidate failed validation.",
+            "next_step": "Try another implementation.",
+            "hypothesis_verdict": "untested",
+            "counterevidence": [],
+        }
+
+        outcome = EvolutionMemoryEntry.from_dict(data).outcome
+
+        self.assertEqual(outcome.hypothesis_verdict, "untested")
+        self.assertEqual(outcome.intervention_verdict, "failed")
+        self.assertEqual(
+            outcome.intervention_evidence,
+            ["The candidate failed validation."],
+        )
 
     def test_task_transitions_are_read_from_generic_results(self):
         with tempfile.TemporaryDirectory() as directory:
