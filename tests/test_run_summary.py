@@ -62,10 +62,14 @@ class RunSummaryTests(unittest.TestCase):
             write_run_summary(
                 run_dir,
                 [entry],
-                {"current_report": {"task_score": 0.5}},
+                {
+                    "baseline_task_score": 0.4,
+                    "current_report": {"task_score": 0.5},
+                },
             )
 
             summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["baseline_task_score"], 0.4)
             self.assertEqual(summary["diagnosed_layers"], {"architecture": 1})
             self.assertEqual(summary["planned_layers"], {"architecture": 1})
             self.assertEqual(summary["generations"][0]["candidate_type"], "source_patch")

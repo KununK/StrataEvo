@@ -25,7 +25,10 @@ def write_run_summary(
     summary = {
         "run_name": run_dir.name,
         "generation_count": len(generations),
-        "baseline_task_score": entries[0].parent_task_score if entries else None,
+        "baseline_task_score": state.get(
+            "baseline_task_score",
+            entries[0].parent_task_score if entries else None,
+        ),
         "current_task_score": state.get("current_report", {}).get("task_score"),
         "diagnosed_layers": dict(sorted(diagnosed_layers.items())),
         "planned_layers": dict(sorted(planned_layers.items())),

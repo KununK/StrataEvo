@@ -524,6 +524,14 @@ def _load_or_create_state(
         state = read_json(path)
         if state["current_commit"] != git.head():
             raise RuntimeError("evolution state does not match the current Git revision")
+        if "baseline_task_score" not in state:
+            summary_path = run_dir / "baseline" / "evaluation" / "summary.json"
+            baseline = read_json(summary_path) if summary_path.is_file() else None
+            state["baseline_task_score"] = float(
+                baseline["pass_at_1"]
+                if baseline
+                else state["current_report"]["task_score"]
+            )
         state.setdefault("current_model", model)
         state.setdefault("current_adapter", None)
         state.setdefault("current_context", None)
@@ -537,6 +545,7 @@ def _load_or_create_state(
         "current_adapter": None,
         "current_context": None,
         "current_tool_profile": None,
+        "baseline_task_score": report.task_score,
         "current_report": report.to_dict(),
     }
     write_json(path, state)
