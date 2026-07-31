@@ -44,7 +44,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
     parser.add_argument("--enable-model-evolution", action="store_true")
-    parser.add_argument("--force-layer", choices=("model", "context", "tools"))
+    parser.add_argument(
+        "--force-layer", choices=("model", "context", "tools", "architecture")
+    )
     parser.add_argument("--sft-device", default="1")
     parser.add_argument("--sft-epochs", type=int, default=1)
     parser.add_argument("--sft-max-samples", type=int, default=32)

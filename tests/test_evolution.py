@@ -65,6 +65,10 @@ class EvolutionTests(unittest.TestCase):
         _validate_args(tools)
         self.assertEqual(tools.force_layer, "tools")
 
+        architecture = parse_args(["--force-layer", "architecture"])
+        _validate_args(architecture)
+        self.assertEqual(architecture.force_layer, "architecture")
+
     def test_refinement_session_returns_evaluation_feedback_to_same_agent(self):
         class FakeAgent:
             max_steps = 0
