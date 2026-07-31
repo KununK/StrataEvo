@@ -72,7 +72,7 @@ class ToolEvolutionTests(unittest.TestCase):
         evaluator = FakeEvaluator([0.6, 0.5, 0.7])
         with tempfile.TemporaryDirectory() as directory:
             result = evolve_tools(
-                EvolutionConfig(repo=directory, run_name="test"),
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=1),
                 1,
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
@@ -95,7 +95,7 @@ class ToolEvolutionTests(unittest.TestCase):
         evaluator = FakeEvaluator([0.4])
         with tempfile.TemporaryDirectory() as directory:
             result = evolve_tools(
-                EvolutionConfig(repo=directory, run_name="test"),
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=1),
                 1,
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
@@ -109,6 +109,43 @@ class ToolEvolutionTests(unittest.TestCase):
             )
         self.assertEqual(result.decision, "rejected")
         self.assertEqual(evaluator.profiles[-1], parent)
+
+    def test_rejected_candidate_is_refined_with_screening_feedback(self):
+        model = ScriptedModel(
+            [
+                Message(
+                    "assistant",
+                    json.dumps(
+                        {"description_addenda": {"read_file": "Read every file first."}}
+                    ),
+                ),
+                Message(
+                    "assistant",
+                    json.dumps(
+                        {"description_addenda": {"read_file": "Read relevant evidence first."}}
+                    ),
+                ),
+            ]
+        )
+        evaluator = FakeEvaluator([0.4, 0.6, 0.5, 0.7])
+        with tempfile.TemporaryDirectory() as directory:
+            generation_dir = Path(directory) / "generation-0001"
+            result = evolve_tools(
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=2),
+                1,
+                generation_dir,
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
+                evaluator,
+                self._diagnosis(),
+                self._plan(),
+                [],
+                parent_profile=None,
+                model_name="test-model",
+                model=model,
+            )
+
+        self.assertEqual(result.decision, "accepted")
+        self.assertIn("Read every file first.", model.requests[1][1].content)
 
     def test_benchmark_loader_reads_description_addenda(self):
         with tempfile.TemporaryDirectory() as directory:

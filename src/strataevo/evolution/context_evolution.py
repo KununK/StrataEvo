@@ -56,6 +56,7 @@ class ContextEvolver:
         plan: EvolutionPlanReport,
         history: list[EvolutionMemoryEntry],
         contract: EvaluationContract,
+        feedback: list[dict[str, Any]] | None = None,
     ) -> tuple[ContextProfile, dict[str, Any]]:
         selected = diagnosis.diagnoses[plan.plan.target_diagnosis]
         payload = {
@@ -64,6 +65,7 @@ class ContextEvolver:
             "plan": plan.plan.to_dict(),
             "evaluation_contract": contract.to_dict(),
             "prior_evolution": memory_context(history, max_chars=8_000),
+            "refinement_feedback": (feedback or [])[-1:],
         }
 
         def parse_candidate(data: dict[str, Any]) -> ContextProfile:
@@ -79,6 +81,8 @@ class ContextEvolver:
                 Message(
                     "user",
                     "Create one general context candidate for the supplied plan. "
+                    "When refinement_feedback is present, revise the prior candidate in response "
+                    "to its measured outcome. "
                     "Return only the requested JSON.\n\n"
                     + json.dumps(payload, indent=2, ensure_ascii=False),
                 ),
@@ -131,13 +135,21 @@ def evolve_context(
         temperature=0.0,
         timeout=300.0,
     )
-    candidate, metadata = ContextEvolver(model).create_candidate(
-        parent,
-        diagnosis,
-        plan,
-        history,
-        evaluator.contract,
-    )
+    evolver = ContextEvolver(model)
+
+    def create_candidate(
+        feedback: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        candidate, metadata = evolver.create_candidate(
+            parent,
+            diagnosis,
+            plan,
+            history,
+            evaluator.contract,
+            feedback,
+        )
+        return candidate.to_dict(), metadata
+
     return evolve_profile(
         generation=generation,
         output_dir=context_dir,
@@ -146,7 +158,7 @@ def evolve_context(
         evaluator=evaluator,
         normalized_parent=parent.to_dict(),
         active_parent=parent_context,
-        candidate=candidate.to_dict(),
-        metadata=metadata,
+        create_candidate=create_candidate,
         activate=evaluator.set_context,
+        max_evaluations=config.max_eval_attempts,
     )

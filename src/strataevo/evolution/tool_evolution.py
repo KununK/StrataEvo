@@ -61,6 +61,7 @@ class ToolEvolver:
         plan: EvolutionPlanReport,
         history: list[EvolutionMemoryEntry],
         contract: EvaluationContract,
+        feedback: list[dict[str, Any]] | None = None,
     ) -> tuple[ToolProfile, dict[str, Any]]:
         selected = diagnosis.diagnoses[plan.plan.target_diagnosis]
         payload = {
@@ -70,6 +71,7 @@ class ToolEvolver:
             "plan": plan.plan.to_dict(),
             "evaluation_contract": contract.to_dict(),
             "prior_evolution": memory_context(history, max_chars=8_000),
+            "refinement_feedback": (feedback or [])[-1:],
         }
         known_tools = set(tool_descriptions)
 
@@ -86,6 +88,8 @@ class ToolEvolver:
                 Message(
                     "user",
                     "Create one general tool-description candidate for the supplied plan. "
+                    "When refinement_feedback is present, revise the prior candidate in response "
+                    "to its measured outcome. "
                     "Return only the requested JSON.\n\n"
                     + json.dumps(payload, indent=2, ensure_ascii=False),
                 ),
@@ -142,14 +146,22 @@ def evolve_tools(
         temperature=0.0,
         timeout=300.0,
     )
-    candidate, metadata = ToolEvolver(model).create_candidate(
-        parent,
-        descriptions,
-        diagnosis,
-        plan,
-        history,
-        evaluator.contract,
-    )
+    evolver = ToolEvolver(model)
+
+    def create_candidate(
+        feedback: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        candidate, metadata = evolver.create_candidate(
+            parent,
+            descriptions,
+            diagnosis,
+            plan,
+            history,
+            evaluator.contract,
+            feedback,
+        )
+        return candidate.to_dict(), metadata
+
     return evolve_profile(
         generation=generation,
         output_dir=tool_dir,
@@ -158,7 +170,7 @@ def evolve_tools(
         evaluator=evaluator,
         normalized_parent=parent.to_dict(),
         active_parent=parent_profile,
-        candidate=candidate.to_dict(),
-        metadata=metadata,
+        create_candidate=create_candidate,
         activate=evaluator.set_tool_profile,
+        max_evaluations=config.max_eval_attempts,
     )

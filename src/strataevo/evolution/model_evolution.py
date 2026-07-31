@@ -15,7 +15,7 @@ from .diagnosis import Diagnosis
 from .evaluation import BenchmarkEvaluator
 from .io import read_jsonl
 from .plan import EvolutionPlan
-from .profile_evolution import ProfileEvolutionResult, evaluate_profile
+from .profile_evolution import ProfileEvolutionResult, evaluate_profile, task_changes
 from .repair import RepairCollection, collect_failed_task_repairs
 from .types import EvaluationReport, EvolutionConfig
 
@@ -349,22 +349,3 @@ def _run_training(config: EvolutionConfig, config_path: Path, log_path: Path) ->
     if completed.returncode:
         raise RuntimeError(f"LoRA training failed; see {log_path}")
     print("[evolution] LoRA training completed", flush=True)
-
-
-def task_changes(parent_dir: str | Path, candidate_dir: str | Path) -> dict[str, list[str]]:
-    parent = {
-        str(row["task_id"]): bool(row.get("passed", row.get("status") == "pass"))
-        for row in read_jsonl(Path(parent_dir) / "results.jsonl", missing_ok=True)
-    }
-    candidate = {
-        str(row["task_id"]): bool(row.get("passed", row.get("status") == "pass"))
-        for row in read_jsonl(Path(candidate_dir) / "results.jsonl", missing_ok=True)
-    }
-    shared = sorted(parent.keys() & candidate.keys())
-    return {
-        "fixed_tasks": [task for task in shared if not parent[task] and candidate[task]],
-        "regressed_tasks": [task for task in shared if parent[task] and not candidate[task]],
-        "still_failed_tasks": [
-            task for task in shared if not parent[task] and not candidate[task]
-        ],
-    }

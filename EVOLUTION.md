@@ -103,7 +103,7 @@ strataevo \
 ```text
 --mutator-max-steps       Meta-Agent 修改自身时允许的最大模型/工具轮数
 --mutator-rounds          每代最多进行的连续修改反馈轮数
---max-eval-attempts       每代最多进行的候选 benchmark 次数
+--max-eval-attempts       每代最多进行的候选 benchmark 次数或 profile 细化轮数
 --benchmark               评测集：humaneval 或 mbpp
 --eval-offset             benchmark 开发任务的起始位置
 --eval-limit              使用的任务数量；默认不限制
@@ -389,10 +389,12 @@ system_prompt_addendum  追加到固定 system prompt 的通用指令
 task_prompt_addendum    追加到每道任务 user prompt 的通用指令
 ```
 
-Context 候选不能包含任务 ID、具体解答、hidden tests 或 repair 代码。它先参与 screening；
-只有高于当前父代才进入新鲜父子复测。接受后 `state.json.current_context` 指向候选文件，后续
-所有 benchmark 和其他层演化都会继续使用该 context；拒绝或异常时 evaluator 立即恢复父代。
-Context 文件保存在 run artifact 中，不修改源码，因此不产生 Git commit。
+Context 候选不能包含任务 ID、具体解答、hidden tests 或 repair 代码。每次 screening 未提升时，
+控制器把候选、分数差和任务变化反馈给同一个 Context Evolver，最多继续
+`--max-eval-attempts` 轮；第一个超过当前父代的候选进入新鲜父子复测。接受后
+`state.json.current_context` 指向候选文件，后续所有 benchmark 和其他层演化都会继续使用该
+context；全部候选拒绝或发生异常时 evaluator 恢复父代。Context 文件保存在 run artifact 中，
+不修改源码，因此不产生 Git commit。
 
 可以使用 `--force-layer context` 单独验证该执行器。正式实验省略该参数，由四层 Diagnosis
 和 Evolution Plan 决定是否选择 context。
@@ -411,10 +413,11 @@ Context 文件保存在 run artifact 中，不修改源码，因此不产生 Git
 ```
 
 它不改变工具名称、参数 schema、实现、审批要求或权限，因此工具执行契约保持不变。
-ToolProfile 与 ContextProfile 共用候选评测事务：screening 通过后进行新鲜父子复测，接受后
-写入 `state.json.current_tool_profile` 并供后续代使用；拒绝或异常时恢复父代。候选保存在
-`generation-NNNN/tools/`，包括 `parent.json`、`candidate.json`、`screening/` 和
-`promotion/`。可以使用 `--force-layer tools` 单独验证执行器。
+ToolProfile 与 ContextProfile 共用连续细化和候选评测事务：screening 未提升时将测量结果反馈
+给 Tool Evolver，首个提升候选再进行新鲜父子复测。接受后写入
+`state.json.current_tool_profile` 并供后续代使用；全部拒绝或异常时恢复父代。候选保存在
+`generation-NNNN/tools/`，包括各轮 `attempt-NNNN/`、`refinement.json` 和 `promotion/`。
+可以使用 `--force-layer tools` 单独验证执行器。
 
 ## 跨代 Evolution Memory
 

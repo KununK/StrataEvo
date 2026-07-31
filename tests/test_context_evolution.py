@@ -102,7 +102,7 @@ class ContextEvolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             generation_dir = Path(directory) / "generation-0001"
             result = evolve_context(
-                EvolutionConfig(repo=directory, run_name="test"),
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=1),
                 1,
                 generation_dir,
                 parent_report,
@@ -146,7 +146,7 @@ class ContextEvolutionTests(unittest.TestCase):
         evaluator = FakeEvaluator([0.4])
         with tempfile.TemporaryDirectory() as directory:
             result = evolve_context(
-                EvolutionConfig(repo=directory, run_name="test"),
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=1),
                 1,
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
@@ -160,6 +160,94 @@ class ContextEvolutionTests(unittest.TestCase):
             )
 
         self.assertEqual(result.decision, "rejected")
+        self.assertEqual(evaluator.contexts[-1], parent)
+
+    def test_rejected_candidate_is_refined_with_screening_feedback(self):
+        model = ScriptedModel(
+            [
+                Message(
+                    "assistant",
+                    json.dumps(
+                        {
+                            "system_prompt_addendum": "Use broad verification.",
+                            "task_prompt_addendum": "",
+                        }
+                    ),
+                ),
+                Message(
+                    "assistant",
+                    json.dumps(
+                        {
+                            "system_prompt_addendum": "Verify only the requested behavior.",
+                            "task_prompt_addendum": "",
+                        }
+                    ),
+                ),
+            ]
+        )
+        evaluator = FakeEvaluator([0.4, 0.6, 0.5, 0.7])
+        with tempfile.TemporaryDirectory() as directory:
+            generation_dir = Path(directory) / "generation-0001"
+            result = evolve_context(
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=2),
+                1,
+                generation_dir,
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
+                evaluator,
+                self._diagnosis(),
+                self._plan(),
+                [],
+                parent_context=None,
+                model_name="test-model",
+                model=model,
+            )
+
+            feedback = json.loads(
+                (generation_dir / "context/refinement.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result.decision, "accepted")
+        self.assertEqual(len(feedback), 2)
+        self.assertIn('"score_delta"', model.requests[1][1].content)
+        self.assertIn("Use broad verification.", model.requests[1][1].content)
+
+    def test_refinement_restores_parent_and_reports_best_rejected_candidate(self):
+        model = ScriptedModel(
+            [
+                Message(
+                    "assistant",
+                    json.dumps({"system_prompt_addendum": "First attempt."}),
+                ),
+                Message(
+                    "assistant",
+                    json.dumps({"system_prompt_addendum": "Second attempt."}),
+                ),
+            ]
+        )
+        evaluator = FakeEvaluator([0.4, 0.3])
+        parent = {
+            "system_prompt_addendum": "Parent.",
+            "task_prompt_addendum": "",
+            "path": "parent.json",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            result = evolve_context(
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=2),
+                1,
+                Path(directory) / "generation-0001",
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
+                evaluator,
+                self._diagnosis(),
+                self._plan(),
+                [],
+                parent_context=parent,
+                model_name="test-model",
+                model=model,
+            )
+
+        self.assertEqual(result.decision, "rejected")
+        self.assertEqual(result.candidate_report.task_score, 0.4)
+        self.assertEqual(result.candidate["system_prompt_addendum"], "First attempt.")
         self.assertEqual(evaluator.contexts[-1], parent)
 
     def test_benchmark_prompt_loader_appends_both_context_fields(self):

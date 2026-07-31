@@ -216,6 +216,8 @@ Context Evolution 将通用提示词增量保存为独立 `ContextProfile`，而
 候选包含 `system_prompt_addendum` 和 `task_prompt_addendum`，会在 benchmark 运行时追加到
 固定基础提示词。候选经过 screening 和新鲜父子复测；接受后写入 `state.json` 和
 `evolution_memory.jsonl`，拒绝则恢复父代 context。它不会产生 Git evolution commit。
+screening 未提升时，同一代会将候选、分数差和任务变化反馈给 Context Evolver 继续生成；
+最多使用 `--max-eval-attempts` 个候选，首个超过父代的候选再进入一次新鲜父子复测。
 
 最小链路测试可以使用：
 
@@ -240,7 +242,8 @@ ContextProfile 只允许通用指令，不保存任务 ID、具体答案、hidde
 工具追加通用的使用、顺序、验证或失败恢复说明，不改变工具名称、参数 schema、Python
 实现、审批要求或执行权限。候选与 ContextProfile 使用相同的 screening、新鲜父子复测和
 回滚事务；接受后写入 `state.json.current_tool_profile` 和 Evolution Memory，且不产生 Git
-commit。
+commit。未提升的 screening 结果同样会在本代反馈给 Tool Evolver，直到产生可晋级候选或
+耗尽 `--max-eval-attempts`。
 
 ```bash
 strataevo \
