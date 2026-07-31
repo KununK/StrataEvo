@@ -10,6 +10,7 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
+from .capabilities import executor_capabilities
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport, EvolutionLayer
 from .io import write_json
@@ -207,7 +208,7 @@ class EvolutionPlanner:
             "evaluation_contract": (
                 evaluation_contract.to_dict() if evaluation_contract is not None else None
             ),
-            "executor_capabilities": _executor_capabilities(
+            "executor_capabilities": executor_capabilities(
                 model_evolution,
                 available_tools or [],
             ),
@@ -342,34 +343,6 @@ Return exactly this JSON object:
   "prerequisites": ["condition needed for the future value"],
   "confidence": 0.0
 }"""
-
-
-def _executor_capabilities(
-    model_evolution: bool,
-    available_tools: list[str],
-) -> dict[str, Any]:
-    return {
-        "architecture": {
-            "operation": "source_patch",
-            "scope": "benchmark-active repository files",
-        },
-        "model": {
-            "enabled": model_evolution,
-            "operation": (
-                "verifier-guided repair collection followed by LoRA SFT"
-                if model_evolution
-                else "generic source mutation; model-weight evolution is disabled"
-            ),
-        },
-        "context": {
-            "operation": "versioned prompt addenda",
-            "fields": ["system_prompt_addendum", "task_prompt_addendum"],
-        },
-        "tools": {
-            "operation": "description addenda for existing Agent tools",
-            "available_tools": sorted(set(available_tools)),
-        },
-    }
 
 
 def _execution_record(entry: EvolutionMemoryEntry) -> dict[str, Any]:

@@ -2,6 +2,7 @@ import json
 import unittest
 from dataclasses import replace
 
+from strataevo.evolution.capabilities import executor_capabilities
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from strataevo.evolution.memory import EvolutionMemoryEntry, MemoryDiagnosis
@@ -61,7 +62,14 @@ class DiagnosisTests(unittest.TestCase):
             )
         ]
 
-        report = EvidenceDiagnoser(model).diagnose(self._bundle(), history)
+        report = EvidenceDiagnoser(model).diagnose(
+            self._bundle(),
+            history,
+            capabilities=executor_capabilities(
+                True,
+                ["write_file", "run_shell", "read_file"],
+            ),
+        )
 
         diagnosis = report.diagnoses[0]
         self.assertEqual(diagnosis.primary_layer, EvolutionLayer.ARCHITECTURE)
@@ -78,6 +86,13 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn("task score did not improve", request)
         self.assertIn('"passed": false', request)
         self.assertIn('"requires_strict_improvement": true', request)
+        self.assertIn('"executor_capabilities"', request)
+        self.assertIn('"write_file"', request)
+        self.assertIn('"run_shell"', request)
+        self.assertNotIn('"atan2"', request)
+        system_prompt = model.requests[0][0].content
+        self.assertIn("not an Agent tool", system_prompt)
+        self.assertIn("tools.available_tools", system_prompt)
 
     def test_passed_max_steps_case_is_explicitly_an_efficiency_signal(self):
         response = {

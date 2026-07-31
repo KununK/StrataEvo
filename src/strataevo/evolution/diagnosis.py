@@ -9,8 +9,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from tinyagent import Message, Model, OpenAICompatibleModel
+from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
+from .capabilities import executor_capabilities
 from .evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
@@ -125,6 +126,7 @@ class EvidenceDiagnoser:
         bundle: EvidenceBundle,
         history: list[EvolutionMemoryEntry] | None = None,
         force_layer: EvolutionLayer | None = None,
+        capabilities: dict[str, Any] | None = None,
     ) -> DiagnosisReport:
         candidates = _select_cases(bundle.cases, self.max_cases)
         payload = {
@@ -136,6 +138,7 @@ class EvidenceDiagnoser:
                 "meaning": "pass@1",
                 "requires_strict_improvement": True,
             },
+            "executor_capabilities": capabilities or {},
             "cases": [],
             "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(
@@ -201,6 +204,12 @@ Layer definitions:
 - tools: tool schemas, descriptions, implementations, skills, and tool-result representations.
 - architecture: agent loop, planning, stopping, validation, recovery, state, and orchestration.
 
+When executor_capabilities is provided, use it as the factual boundary of the current system.
+A function or library API used inside benchmark task code is not an Agent tool unless its name
+appears in tools.available_tools. Do not assign the tools layer solely because an error mentions a
+function call; use it only when evidence implicates an available Agent tool's interface,
+description, use, or result.
+
 Use only supplied observations. Cite task IDs and concrete events in evidence. If forced_layer is
 not null, include an evidence-grounded diagnosis whose primary_layer matches it. Prior evolution
 records are outcomes, not proof of the current cause: use them to avoid blindly repeating rejected
@@ -242,7 +251,16 @@ def diagnose_evaluation(
         timeout=300.0,
     )
     forced_layer = EvolutionLayer(config.force_layer) if config.force_layer else None
-    diagnosis = EvidenceDiagnoser(model).diagnose(bundle, history, forced_layer)
+    capabilities = executor_capabilities(
+        config.model_evolution,
+        [tool.name for tool in Workspace(config.repo).tools()],
+    )
+    diagnosis = EvidenceDiagnoser(model).diagnose(
+        bundle,
+        history,
+        forced_layer,
+        capabilities,
+    )
     write_json(destination, diagnosis.to_dict())
     return diagnosis
 
