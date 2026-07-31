@@ -36,6 +36,32 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertIn('"requires_strict_improvement": true', request)
         self.assertIn('"parent_task_score": 0.5', request)
 
+    def test_planner_receives_executor_capabilities_without_hard_validation(self):
+        model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
+
+        report = EvolutionPlanner(model).create_plan(
+            self._diagnosis(),
+            self._parent(),
+            model_evolution=True,
+            available_tools=["run_shell", "read_file", "run_shell"],
+        )
+
+        self.assertEqual(report.plan.primary_layer, EvolutionLayer.ARCHITECTURE)
+        request = model.requests[0][1].content
+        self.assertIn('"executor_capabilities"', request)
+        self.assertIn(
+            '"operation": "verifier-guided repair collection followed by LoRA SFT"',
+            request,
+        )
+        self.assertIn('"fields": [', request)
+        self.assertIn('"read_file"', request)
+        self.assertIn('"run_shell"', request)
+        self.assertNotIn('"atan2"', request)
+        self.assertIn(
+            "not an Agent tool unless its name appears",
+            model.requests[0][0].content,
+        )
+
     def test_planner_receives_explicit_refuted_hypotheses(self):
         model = ScriptedModel([Message("assistant", json.dumps(self._plan()))])
         history = [

@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from tinyagent import Message, Model, OpenAICompatibleModel
+from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport, EvolutionLayer
@@ -184,6 +184,7 @@ class EvolutionPlanner:
         evaluation_contract: EvaluationContract | None = None,
         model_evolution: bool = False,
         force_layer: EvolutionLayer | None = None,
+        available_tools: list[str] | None = None,
     ) -> EvolutionPlanReport:
         mutable_paths = list(mutable_paths or DEFAULT_MUTABLE_PATHS)
         available_metrics = evaluation_metrics(parent_report.to_dict())
@@ -206,18 +207,10 @@ class EvolutionPlanner:
             "evaluation_contract": (
                 evaluation_contract.to_dict() if evaluation_contract is not None else None
             ),
-            "model_evolution": {
-                "enabled": model_evolution,
-                "mechanism": "verifier-guided test-time LoRA SFT",
-            },
-            "context_evolution": {
-                "enabled": True,
-                "mechanism": "versioned reusable prompt addenda",
-            },
-            "tool_evolution": {
-                "enabled": True,
-                "mechanism": "versioned tool-description addenda",
-            },
+            "executor_capabilities": _executor_capabilities(
+                model_evolution,
+                available_tools or [],
+            ),
             "forced_layer": force_layer.value if force_layer else None,
             "prior_evolution": memory_context(history or [], max_chars=12_000),
             "execution_history": [
@@ -300,6 +293,9 @@ Treat executed_intervention as authoritative evidence of what was tested. Do not
 planned behavior was evaluated when the executor performed a different action. An accepted
 execution may be extended to newly affected or remaining failed tasks; an ineffective or failed
 execution must be revised rather than copied.
+The executor_capabilities describe what each layer can actually produce. Use them as factual
+planning context, not as evidence that a diagnosis is correct. A function mentioned by a benchmark
+task is not an Agent tool unless its name appears in tools.available_tools.
 Treat deferred_change, mixed_change_scope, and unclassified_change as an evaluation-contract
 mismatch: the intervention was not tested by the benchmark and must not be interpreted as a
 negative task result.
@@ -346,6 +342,34 @@ Return exactly this JSON object:
   "prerequisites": ["condition needed for the future value"],
   "confidence": 0.0
 }"""
+
+
+def _executor_capabilities(
+    model_evolution: bool,
+    available_tools: list[str],
+) -> dict[str, Any]:
+    return {
+        "architecture": {
+            "operation": "source_patch",
+            "scope": "benchmark-active repository files",
+        },
+        "model": {
+            "enabled": model_evolution,
+            "operation": (
+                "verifier-guided repair collection followed by LoRA SFT"
+                if model_evolution
+                else "generic source mutation; model-weight evolution is disabled"
+            ),
+        },
+        "context": {
+            "operation": "versioned prompt addenda",
+            "fields": ["system_prompt_addendum", "task_prompt_addendum"],
+        },
+        "tools": {
+            "operation": "description addenda for existing Agent tools",
+            "available_tools": sorted(set(available_tools)),
+        },
+    }
 
 
 def _execution_record(entry: EvolutionMemoryEntry) -> dict[str, Any]:
@@ -464,6 +488,7 @@ def plan_evolution(
         evaluation_contract=evaluation_contract,
         model_evolution=config.model_evolution,
         force_layer=forced_layer,
+        available_tools=[tool.name for tool in Workspace(config.repo).tools()],
     )
     write_json(destination, report.to_dict())
     return report
