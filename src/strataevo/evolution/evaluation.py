@@ -29,6 +29,7 @@ class BenchmarkSpec:
     name: str
     display_name: str
     module: str
+    execution_module: str
     objective: str
     direct_paths: tuple[str, ...] = ("src/tinyagent",)
     deferred_paths: tuple[str, ...] = ("src/strataevo/evolution/mutator.py",)
@@ -170,6 +171,7 @@ HUMANEVAL = BenchmarkSpec(
     name="humaneval",
     display_name="HumanEval",
     module="eval.humaneval.run",
+    execution_module="eval.humaneval.execution",
     objective="Improve the task-solving Tinyagent measured by HumanEval pass@1.",
 )
 
@@ -177,6 +179,7 @@ MBPP = BenchmarkSpec(
     name="mbpp",
     display_name="MBPP",
     module="eval.mbpp.run",
+    execution_module="eval.mbpp.execution",
     objective="Improve the task-solving Tinyagent measured by MBPP pass@1.",
 )
 

@@ -332,6 +332,30 @@ class ModelEvolutionTests(unittest.TestCase):
             self.assertEqual(tasks, [task])
             self.assertIn("TESTS =", render(tasks[0]))
 
+    def test_repair_adapter_uses_registered_humaneval_renderer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config.json").write_text(
+                json.dumps({"dataset": "unused"}),
+                encoding="utf-8",
+            )
+            task = {
+                "task_id": "HumanEval/0",
+                "prompt": "def add(a, b):\n",
+                "test": "def check(candidate): pass",
+                "entry_point": "add",
+            }
+            self._write_jsonl(root / "tasks.jsonl", [task])
+
+            tasks, render, _verify = _benchmark_adapter(
+                "humaneval",
+                root / "config.json",
+                Path(__file__).resolve().parents[1],
+            )
+
+            self.assertEqual(tasks, [task])
+            self.assertEqual(render(task), task["prompt"])
+
     def test_task_changes_records_fixed_regressed_and_still_failed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -26,8 +26,14 @@ def write_json(path: str | Path, data: dict[str, Any]) -> None:
     temporary.replace(target)
 
 
-def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
+def read_jsonl(
+    path: str | Path,
+    *,
+    missing_ok: bool = False,
+) -> list[dict[str, Any]]:
     target = Path(path)
+    if missing_ok and not target.is_file():
+        return []
     rows: list[dict[str, Any]] = []
     for line_number, line in enumerate(target.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -37,3 +43,12 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
             raise ValueError(f"expected JSON object: {target}:{line_number}")
         rows.append(row)
     return rows
+
+
+def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )

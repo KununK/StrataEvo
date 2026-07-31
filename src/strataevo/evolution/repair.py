@@ -14,6 +14,8 @@ from typing import Any
 
 from tinyagent import Model, OpenAICompatibleModel
 
+from .evaluation import BENCHMARKS
+from .io import read_jsonl, write_json, write_jsonl
 from .types import EvolutionConfig
 
 REPAIR_SYSTEM_PROMPT = """You are repairing a failed coding-agent attempt.
@@ -55,7 +57,7 @@ def collect_failed_task_repairs(
     source = Path(evaluation_dir)
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    results = _read_jsonl(source / "results.jsonl")
+    results = read_jsonl(source / "results.jsonl")
     failed = {
         str(row["task_id"]): row
         for row in results
@@ -195,30 +197,18 @@ def _benchmark_adapter(
     values = json.loads(config_path.read_text(encoding="utf-8"))
     args = argparse.Namespace(**values)
     tasks_path = config_path.parent / "tasks.jsonl"
-    saved_tasks = _read_jsonl(tasks_path) if tasks_path.is_file() else None
-    if benchmark == "humaneval":
-        evaluate_source = _load_eval_symbol(
-            repo,
-            "eval.humaneval.execution",
-            "evaluate_source",
-        )
-        load_tasks = _load_eval_symbol(repo, "eval.humaneval.run", "load_tasks")
-
-        return (
-            saved_tasks if saved_tasks is not None else load_tasks(args),
-            lambda task: str(task["prompt"]),
-            lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
-        )
-    if benchmark == "mbpp":
-        evaluate_source = _load_eval_symbol(repo, "eval.mbpp.execution", "evaluate_source")
-        run_module = _load_eval_module(repo, "eval.mbpp.run")
-
-        return (
-            saved_tasks if saved_tasks is not None else run_module.load_tasks(args),
-            run_module.render_task_file,
-            lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
-        )
-    raise ValueError(f"repair collection does not support benchmark: {benchmark}")
+    saved_tasks = read_jsonl(tasks_path) if tasks_path.is_file() else None
+    try:
+        spec = BENCHMARKS[benchmark]
+    except KeyError as error:
+        raise ValueError(f"repair collection does not support benchmark: {benchmark}") from error
+    run_module = _load_eval_module(repo, spec.module)
+    evaluate_source = _load_eval_symbol(repo, spec.execution_module, "evaluate_source")
+    return (
+        saved_tasks if saved_tasks is not None else run_module.load_tasks(args),
+        run_module.render_task_file,
+        lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
+    )
 
 
 def _load_eval_module(repo: str | Path, module: str) -> Any:
@@ -242,29 +232,9 @@ def _write_collection(
     results: list[dict[str, Any]],
     collection: RepairCollection,
 ) -> None:
-    _write_jsonl(output_dir / "generations.jsonl", generations)
-    _write_jsonl(output_dir / "results.jsonl", results)
-    (output_dir / "summary.json").write_text(
-        json.dumps(collection.to_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-
-
-def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.write_text(
-        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    write_jsonl(output_dir / "generations.jsonl", generations)
+    write_jsonl(output_dir / "results.jsonl", results)
+    write_json(output_dir / "summary.json", collection.to_dict())
 
 
 def _safe_name(task_id: str) -> str:

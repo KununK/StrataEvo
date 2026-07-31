@@ -91,8 +91,7 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn('"run_shell"', request)
         self.assertNotIn('"atan2"', request)
         system_prompt = model.requests[0][0].content
-        self.assertIn("not an Agent tool", system_prompt)
-        self.assertIn("tools.available_tools", system_prompt)
+        self.assertIn("factual description", system_prompt)
 
     def test_passed_max_steps_case_is_explicitly_an_efficiency_signal(self):
         response = {

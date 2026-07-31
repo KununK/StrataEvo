@@ -13,7 +13,6 @@ from strataevo.evolution.cli import (
     parse_args,
     run_one_generation,
 )
-from strataevo.evolution.context_evolution import ContextEvolutionResult
 from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.git import GitRepository
@@ -24,6 +23,7 @@ from strataevo.evolution.plan import (
     ExpectedOutcome,
     MetricDirection,
 )
+from strataevo.evolution.profile_evolution import ProfileEvolutionResult
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from strataevo.evolution.workspace import SelfWorkspace
 from tinyagent import AgentResult, Message, Usage
@@ -825,7 +825,7 @@ class EvolutionTests(unittest.TestCase):
                 "task_prompt_addendum": "",
                 "path": "candidate.json",
             }
-            result = ContextEvolutionResult(
+            result = ProfileEvolutionResult(
                 decision="accepted",
                 outcome_type="accepted",
                 reason="fresh promotion comparison: pass@1 strictly improved",

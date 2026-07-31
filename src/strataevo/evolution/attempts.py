@@ -80,14 +80,14 @@ class CandidateEvaluationSession:
             attempt_dir = self.generation_dir / f"attempt-{number:04d}"
             attempt_dir.mkdir(parents=True, exist_ok=False)
             attempt = EvaluationAttempt(
-                number,
-                "no_change",
-                "candidate has no source changes",
-                [],
-                None,
-                None,
-                None,
-                None,
+                number=number,
+                outcome_type="no_change",
+                reason="candidate has no source changes",
+                changed_paths=[],
+                patch_path=None,
+                validation_log=None,
+                report=None,
+                change_impact=None,
             )
             return self._finish_attempt(
                 attempt,
@@ -124,17 +124,20 @@ class CandidateEvaluationSession:
         patch_path.write_text(patch, encoding="utf-8")
         impact = self.evaluator.contract.classify(changed_paths)
         semantics = classify_changes(self.repo, changed_paths, self.git.head_text)
+        candidate = {
+            "number": number,
+            "changed_paths": changed_paths,
+            "patch_path": str(patch_path),
+            "change_impact": impact.to_dict(),
+            "change_semantics": semantics.to_dict(),
+        }
         if semantics.classification == "semantic_noop":
             attempt = EvaluationAttempt(
-                number,
-                "semantic_noop",
-                "candidate changes only comments, formatting, or equivalent structured data",
-                changed_paths,
-                str(patch_path),
-                None,
-                None,
-                impact.to_dict(),
-                semantics.to_dict(),
+                outcome_type="semantic_noop",
+                reason="candidate changes only comments, formatting, or equivalent structured data",
+                validation_log=None,
+                report=None,
+                **candidate,
             )
             self._restore(self._best_improving_attempt())
             return self._finish_attempt(
@@ -145,15 +148,11 @@ class CandidateEvaluationSession:
         scope_error = _scope_error(impact)
         if scope_error:
             attempt = EvaluationAttempt(
-                number,
-                scope_error[0],
-                scope_error[1],
-                changed_paths,
-                str(patch_path),
-                None,
-                None,
-                impact.to_dict(),
-                semantics.to_dict(),
+                outcome_type=scope_error[0],
+                reason=scope_error[1],
+                validation_log=None,
+                report=None,
+                **candidate,
             )
             self._restore(self._best_improving_attempt())
             return self._finish_attempt(
@@ -175,15 +174,11 @@ class CandidateEvaluationSession:
         )
         if not gates_passed:
             attempt = EvaluationAttempt(
-                number,
-                "validation_failed",
-                _last_output(output),
-                changed_paths,
-                str(patch_path),
-                str(validation_log),
-                None,
-                impact.to_dict(),
-                semantics.to_dict(),
+                outcome_type="validation_failed",
+                reason=_last_output(output),
+                validation_log=str(validation_log),
+                report=None,
+                **candidate,
             )
             return self._finish_attempt(
                 attempt,
@@ -200,15 +195,11 @@ class CandidateEvaluationSession:
             report = self.evaluator.evaluate(attempt_dir / "evaluation")
         except Exception as error:
             attempt = EvaluationAttempt(
-                number,
-                "evaluation_failed",
-                f"{type(error).__name__}: {error}",
-                changed_paths,
-                str(patch_path),
-                str(validation_log),
-                None,
-                impact.to_dict(),
-                semantics.to_dict(),
+                outcome_type="evaluation_failed",
+                reason=f"{type(error).__name__}: {error}",
+                validation_log=str(validation_log),
+                report=None,
+                **candidate,
             )
             return self._finish_attempt(
                 attempt,
@@ -229,15 +220,11 @@ class CandidateEvaluationSession:
             restored = "best candidate" if restore_attempt else "parent"
             reason += f"; restored {restored} after non-improving result"
         attempt = EvaluationAttempt(
-            number,
-            "evaluated",
-            reason,
-            changed_paths,
-            str(patch_path),
-            str(validation_log),
-            report.to_dict(),
-            impact.to_dict(),
-            semantics.to_dict(),
+            outcome_type="evaluated",
+            reason=reason,
+            validation_log=str(validation_log),
+            report=report.to_dict(),
+            **candidate,
         )
         if regressed:
             self._restore(restore_attempt)
@@ -363,11 +350,7 @@ class CandidateEvaluationSession:
         elif attempt.outcome_type == "semantic_noop":
             next_action = "Make a focused behavioral change before requesting another check."
         elif attempt.outcome_type == "validation_failed":
-            next_action = (
-                "Correct the reported validation errors before requesting another check. "
-                "Use read_file as the source of truth; diagnostic gutters are annotations, "
-                "not source characters."
-            )
+            next_action = "Correct the reported validation errors before requesting another check."
         elif attempt.outcome_type == "evaluation_failed":
             next_action = "Inspect the evaluation error and correct the retained candidate."
         elif report and float(report["task_score"]) >= 1.0:

@@ -48,6 +48,10 @@ def load_tasks(args: argparse.Namespace) -> list[dict[str, Any]]:
     return tasks[args.offset : end]
 
 
+def render_task_file(task: dict[str, Any]) -> str:
+    return str(task["prompt"])
+
+
 def run_agent_task(
     task: dict[str, Any],
     model: Model,
@@ -64,7 +68,7 @@ def run_agent_task(
         task,
         model,
         candidate_path,
-        task_source=str(task["prompt"]),
+        task_source=render_task_file(task),
         evaluate=lambda source, timeout: evaluate_source(task, source, timeout=timeout),
         benchmark="humaneval",
         session_dir=session_dir,

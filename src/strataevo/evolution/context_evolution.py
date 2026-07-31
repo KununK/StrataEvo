@@ -12,10 +12,9 @@ from tinyagent import Message, Model, OpenAICompatibleModel
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport
 from .evaluation import BenchmarkEvaluator
-from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
 from .plan import EvolutionPlanReport
-from .profile_evolution import evaluate_profile
+from .profile_evolution import ProfileEvolutionResult, evolve_profile
 from .structured import request_json
 from .types import EvaluationReport, EvolutionConfig
 
@@ -43,18 +42,6 @@ class ContextProfile:
         ):
             raise ValueError(f"context profile exceeds {MAX_CONTEXT_CHARS} characters")
         return profile
-
-
-@dataclass(slots=True)
-class ContextEvolutionResult:
-    decision: str
-    outcome_type: str
-    reason: str
-    candidate_report: EvaluationReport | None
-    promotion_parent_report: EvaluationReport | None
-    candidate: dict[str, Any]
-    input_tokens: int
-    output_tokens: int
 
 
 class ContextEvolver:
@@ -134,11 +121,10 @@ def evolve_context(
     parent_context: dict[str, Any] | None,
     model_name: str,
     model: Model | None = None,
-) -> ContextEvolutionResult:
+) -> ProfileEvolutionResult:
     """Generate, evaluate, and retain or restore one prompt-context candidate."""
     context_dir = generation_dir / "context"
     parent = ContextProfile.from_dict(parent_context)
-    write_json(context_dir / "parent.json", parent.to_dict())
     model = model or OpenAICompatibleModel(
         model=model_name,
         base_url=config.base_url,
@@ -152,37 +138,15 @@ def evolve_context(
         history,
         evaluator.contract,
     )
-    if candidate == parent:
-        return ContextEvolutionResult(
-            "rejected",
-            "no_change",
-            "context candidate is identical to its parent",
-            None,
-            None,
-            parent.to_dict(),
-            metadata["input_tokens"],
-            metadata["output_tokens"],
-        )
-
-    candidate_path = context_dir / "candidate.json"
-    candidate_record = {**candidate.to_dict(), "path": str(candidate_path)}
-    write_json(candidate_path, {**candidate.to_dict(), "generation": generation, **metadata})
-
-    evaluation = evaluate_profile(
-        parent_report,
-        evaluator,
-        context_dir,
-        parent_context,
-        candidate_record,
-        evaluator.set_context,
-    )
-    return ContextEvolutionResult(
-        evaluation.decision,
-        evaluation.outcome_type,
-        evaluation.reason,
-        evaluation.candidate_report,
-        evaluation.promotion_parent_report,
-        candidate_record,
-        metadata["input_tokens"],
-        metadata["output_tokens"],
+    return evolve_profile(
+        generation=generation,
+        output_dir=context_dir,
+        label="context",
+        parent_report=parent_report,
+        evaluator=evaluator,
+        normalized_parent=parent.to_dict(),
+        active_parent=parent_context,
+        candidate=candidate.to_dict(),
+        metadata=metadata,
+        activate=evaluator.set_context,
     )

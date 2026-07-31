@@ -198,13 +198,9 @@ class EvolutionMemoryEntry:
             "action": {
                 "primary_layer": self.plan.get("primary_layer"),
                 "hypothesis": self.plan.get("hypothesis"),
-                "intervention": self.plan.get("intervention"),
+                "planned_intervention": self.plan.get("intervention"),
+                "executed_intervention": _executed_intervention(self),
                 "expected_outcomes": self.plan.get("expected_outcomes", []),
-                "changed_paths": self.changed_paths,
-                "patch_excerpt": self.patch_excerpt[:PATCH_CONTEXT_CHARS],
-                "model_candidate": self.model_candidate,
-                "context_candidate": self.context_candidate,
-                "tool_candidate": self.tool_candidate,
             },
             "outcome": self.outcome.to_context_dict(),
             "outcome_observations": self.outcome_observations,
@@ -425,6 +421,65 @@ def _attempt_context(attempt: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _executed_intervention(entry: EvolutionMemoryEntry) -> dict[str, Any]:
+    if entry.model_candidate:
+        executed = entry.model_candidate.get("executed_intervention")
+        if isinstance(executed, dict):
+            training = executed.get("training")
+            return {
+                "type": "model_adapter",
+                "targeted_tasks": _limited_strings(executed.get("targeted_tasks")),
+                "repaired_tasks": _limited_strings(executed.get("repaired_tasks")),
+                "repair_attempts": executed.get("repair_attempts", 0),
+                "repair_guidance": str(executed.get("repair_guidance", ""))[
+                    :TEXT_CONTEXT_CHARS
+                ],
+                "training": (
+                    {
+                        key: training.get(key)
+                        for key in ("epochs", "max_length", "lora_rank", "learning_rate")
+                    }
+                    if isinstance(training, dict)
+                    else None
+                ),
+            }
+        return {"type": "model_adapter"}
+    if entry.context_candidate:
+        return {
+            "type": "context_profile",
+            "system_prompt_addendum": str(
+                entry.context_candidate.get("system_prompt_addendum", "")
+            )[:TEXT_CONTEXT_CHARS],
+            "task_prompt_addendum": str(
+                entry.context_candidate.get("task_prompt_addendum", "")
+            )[:TEXT_CONTEXT_CHARS],
+        }
+    if entry.tool_candidate:
+        addenda = entry.tool_candidate.get("description_addenda")
+        return {
+            "type": "tool_profile",
+            "description_addenda": (
+                {
+                    str(name): str(text)[:TEXT_CONTEXT_CHARS]
+                    for name, text in list(addenda.items())[:8]
+                }
+                if isinstance(addenda, dict)
+                else {}
+            ),
+        }
+    if entry.changed_paths:
+        return {
+            "type": "source_patch",
+            "changed_paths": entry.changed_paths,
+            "patch_excerpt": entry.patch_excerpt[:PATCH_CONTEXT_CHARS],
+        }
+    return {"type": "none"}
+
+
+def _limited_strings(value: Any) -> list[str]:
+    return [str(item) for item in value[:TASK_CONTEXT_LIMIT]] if isinstance(value, list) else []
+
+
 def _summarize_generation(
     record: GenerationRecord,
     parent: dict[str, Any],
@@ -443,13 +498,15 @@ def _summarize_generation(
         outcome.fixed_tasks = transitions["fixed_tasks"]
         outcome.regressed_tasks = transitions["regressed_tasks"]
         outcome.remaining_failures = transitions["remaining_failures"]
-        if outcome.hypothesis_verdict == "refuted":
+        if outcome.intervention_verdict == "ineffective":
             if outcome.regressed_tasks:
-                outcome.counterevidence.append(
+                outcome.intervention_evidence.append(
                     f"Regressed {len(outcome.regressed_tasks)} previously passing tasks."
                 )
             if not outcome.fixed_tasks:
-                outcome.counterevidence.append("No failing task was fixed in the comparison.")
+                outcome.intervention_evidence.append(
+                    "No failing task was fixed in the comparison."
+                )
     return outcome
 
 
@@ -476,18 +533,18 @@ def _summarize_outcome(values: dict[str, Any]) -> MemoryOutcome:
         next_step = "Retain this change and build on the evidence that it improved the benchmark."
     elif outcome_type == "benchmark_rejected" and delta is not None and delta < 0:
         status = "regressed"
-        verdict = "refuted"
-        counterevidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
+        verdict = "untested"
+        counterevidence = []
         intervention_verdict = "ineffective"
-        intervention_evidence = list(counterevidence)
+        intervention_evidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
         summary = f"The evaluated intervention regressed by {_format_delta(delta)}."
-        next_step = "Do not repeat this intervention unchanged; revise its causal hypothesis."
+        next_step = "Keep the hypothesis open, but do not repeat this intervention unchanged."
     elif outcome_type == "benchmark_rejected" and delta is not None:
         status = "no_measured_gain"
-        verdict = "refuted"
-        counterevidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
+        verdict = "untested"
+        counterevidence = []
         intervention_verdict = "ineffective"
-        intervention_evidence = list(counterevidence)
+        intervention_evidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
         summary = (
             f"The evaluated intervention produced no promotable gain ({_format_delta(delta)})."
         )

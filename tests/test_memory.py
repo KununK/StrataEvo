@@ -8,6 +8,7 @@ from strataevo.evolution.memory import (
     EvolutionMemoryEntry,
     MemoryDiagnosis,
     MemoryOutcome,
+    _summarize_outcome,
     _task_transitions,
     memory_context,
 )
@@ -143,17 +144,11 @@ class EvolutionMemoryTests(unittest.TestCase):
             },
         }
 
-        candidate = entry.to_context_dict()["action"]["model_candidate"]
+        candidate = entry.to_context_dict()["action"]["executed_intervention"]
 
-        self.assertEqual(candidate["repair_collection"]["repaired_tasks"], ["task/fixed"])
-        self.assertEqual(
-            candidate["screening_task_changes"]["regressed_tasks"],
-            ["task/regressed"],
-        )
-        self.assertEqual(
-            candidate["executed_intervention"]["targeted_tasks"],
-            ["task/fixed"],
-        )
+        self.assertEqual(candidate["type"], "model_adapter")
+        self.assertEqual(candidate["targeted_tasks"], ["task/fixed"])
+        self.assertEqual(candidate["repaired_tasks"], ["task/fixed"])
 
     def test_old_entry_derives_outcome_summary(self):
         data = self._entry(1, "context", "rejected").to_dict()
@@ -210,6 +205,22 @@ class EvolutionMemoryTests(unittest.TestCase):
             outcome.intervention_evidence,
             ["The candidate failed validation."],
         )
+
+    def test_score_regression_rejects_intervention_but_keeps_hypothesis_open(self):
+        outcome = _summarize_outcome(
+            {
+                "decision": "rejected",
+                "outcome_type": "benchmark_rejected",
+                "parent_task_score": 0.8,
+                "candidate_task_score": 0.7,
+            }
+        )
+
+        self.assertEqual(outcome.status, "regressed")
+        self.assertEqual(outcome.hypothesis_verdict, "untested")
+        self.assertEqual(outcome.counterevidence, [])
+        self.assertEqual(outcome.intervention_verdict, "ineffective")
+        self.assertIn("-0.100000", outcome.intervention_evidence[0])
 
     def test_task_transitions_are_read_from_generic_results(self):
         with tempfile.TemporaryDirectory() as directory:

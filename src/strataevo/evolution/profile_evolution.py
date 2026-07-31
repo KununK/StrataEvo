@@ -1,4 +1,4 @@
-"""Shared evaluation transaction for external evolution profiles."""
+"""Shared persistence and evaluation for externally activated candidates."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .evaluation import BenchmarkEvaluator
+from .io import write_json
 from .types import EvaluationReport
 
 
@@ -20,6 +21,63 @@ class ProfileEvaluation:
     promotion_parent_report: EvaluationReport | None
 
 
+@dataclass(slots=True)
+class ProfileEvolutionResult(ProfileEvaluation):
+    candidate: dict[str, Any]
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+def evolve_profile(
+    *,
+    generation: int,
+    output_dir: Path,
+    label: str,
+    parent_report: EvaluationReport,
+    evaluator: BenchmarkEvaluator,
+    normalized_parent: dict[str, Any],
+    active_parent: dict[str, Any] | None,
+    candidate: dict[str, Any],
+    metadata: dict[str, Any],
+    activate: Callable[[dict[str, Any] | None], None],
+) -> ProfileEvolutionResult:
+    """Persist, evaluate, and retain or restore one versioned profile."""
+    write_json(output_dir / "parent.json", normalized_parent)
+    if candidate == normalized_parent:
+        return ProfileEvolutionResult(
+            "rejected",
+            "no_change",
+            f"{label} candidate is identical to its parent",
+            None,
+            None,
+            normalized_parent,
+            int(metadata["input_tokens"]),
+            int(metadata["output_tokens"]),
+        )
+
+    candidate_path = output_dir / "candidate.json"
+    candidate_record = {**candidate, "path": str(candidate_path)}
+    write_json(candidate_path, {**candidate, "generation": generation, **metadata})
+    evaluation = evaluate_profile(
+        parent_report,
+        evaluator,
+        output_dir,
+        active_parent,
+        candidate_record,
+        activate,
+    )
+    return ProfileEvolutionResult(
+        evaluation.decision,
+        evaluation.outcome_type,
+        evaluation.reason,
+        evaluation.candidate_report,
+        evaluation.promotion_parent_report,
+        candidate_record,
+        int(metadata["input_tokens"]),
+        int(metadata["output_tokens"]),
+    )
+
+
 def evaluate_profile(
     parent_report: EvaluationReport,
     evaluator: BenchmarkEvaluator,
@@ -29,8 +87,8 @@ def evaluate_profile(
     activate: Callable[[dict[str, Any] | None], None],
 ) -> ProfileEvaluation:
     """Screen a profile, compare it with a fresh parent, and restore on rejection."""
-    activate(candidate)
     try:
+        activate(candidate)
         screening = evaluator.evaluate(output_dir / "screening" / "evaluation")
         if screening.task_score <= parent_report.task_score:
             activate(parent)

@@ -204,11 +204,8 @@ Layer definitions:
 - tools: tool schemas, descriptions, implementations, skills, and tool-result representations.
 - architecture: agent loop, planning, stopping, validation, recovery, state, and orchestration.
 
-When executor_capabilities is provided, use it as the factual boundary of the current system.
-A function or library API used inside benchmark task code is not an Agent tool unless its name
-appears in tools.available_tools. Do not assign the tools layer solely because an error mentions a
-function call; use it only when evidence implicates an available Agent tool's interface,
-description, use, or result.
+When executor_capabilities is provided, use it as the factual description of what each layer can
+actually change.
 
 Use only supplied observations. Cite task IDs and concrete events in evidence. If forced_layer is
 not null, include an evidence-grounded diagnosis whose primary_layer matches it. Prior evolution
@@ -269,8 +266,8 @@ def _select_cases(cases: list[TaskEvidence], limit: int) -> list[TaskEvidence]:
     def priority(case: TaskEvidence) -> tuple[int, int, int, str]:
         return (
             0 if not case.passed else 1,
-            0 if "artifact_created_then_missing" in case.signals else 1,
-            0 if "max_steps" in case.signals else 1,
+            -len(case.signals),
+            -case.steps,
             case.task_id,
         )
 

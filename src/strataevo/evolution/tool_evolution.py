@@ -12,10 +12,9 @@ from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport
 from .evaluation import BenchmarkEvaluator
-from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
 from .plan import EvolutionPlanReport
-from .profile_evolution import evaluate_profile
+from .profile_evolution import ProfileEvolutionResult, evolve_profile
 from .structured import request_json
 from .types import EvaluationReport, EvolutionConfig
 
@@ -47,18 +46,6 @@ class ToolProfile:
         if sum(map(len, addenda.values())) > MAX_TOOL_PROFILE_CHARS:
             raise ValueError(f"tool profile exceeds {MAX_TOOL_PROFILE_CHARS} characters")
         return cls(addenda)
-
-
-@dataclass(slots=True)
-class ToolEvolutionResult:
-    decision: str
-    outcome_type: str
-    reason: str
-    candidate_report: EvaluationReport | None
-    promotion_parent_report: EvaluationReport | None
-    candidate: dict[str, Any]
-    input_tokens: int
-    output_tokens: int
 
 
 class ToolEvolver:
@@ -143,13 +130,12 @@ def evolve_tools(
     parent_profile: dict[str, Any] | None,
     model_name: str,
     model: Model | None = None,
-) -> ToolEvolutionResult:
+) -> ProfileEvolutionResult:
     """Generate, evaluate, and retain or restore one tool-description profile."""
     tool_dir = generation_dir / "tools"
     tools = Workspace(config.repo).tools()
     descriptions = {item.name: item.description for item in tools}
     parent = ToolProfile.from_dict(parent_profile, set(descriptions))
-    write_json(tool_dir / "parent.json", parent.to_dict())
     model = model or OpenAICompatibleModel(
         model=model_name,
         base_url=config.base_url,
@@ -164,36 +150,15 @@ def evolve_tools(
         history,
         evaluator.contract,
     )
-    if candidate == parent:
-        return ToolEvolutionResult(
-            "rejected",
-            "no_change",
-            "tool candidate is identical to its parent",
-            None,
-            None,
-            parent.to_dict(),
-            metadata["input_tokens"],
-            metadata["output_tokens"],
-        )
-
-    candidate_path = tool_dir / "candidate.json"
-    candidate_record = {**candidate.to_dict(), "path": str(candidate_path)}
-    write_json(candidate_path, {**candidate.to_dict(), "generation": generation, **metadata})
-    evaluation = evaluate_profile(
-        parent_report,
-        evaluator,
-        tool_dir,
-        parent_profile,
-        candidate_record,
-        evaluator.set_tool_profile,
-    )
-    return ToolEvolutionResult(
-        evaluation.decision,
-        evaluation.outcome_type,
-        evaluation.reason,
-        evaluation.candidate_report,
-        evaluation.promotion_parent_report,
-        candidate_record,
-        metadata["input_tokens"],
-        metadata["output_tokens"],
+    return evolve_profile(
+        generation=generation,
+        output_dir=tool_dir,
+        label="tool",
+        parent_report=parent_report,
+        evaluator=evaluator,
+        normalized_parent=parent.to_dict(),
+        active_parent=parent_profile,
+        candidate=candidate.to_dict(),
+        metadata=metadata,
+        activate=evaluator.set_tool_profile,
     )

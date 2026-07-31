@@ -8,25 +8,16 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from .diagnosis import Diagnosis
 from .evaluation import BenchmarkEvaluator
+from .io import read_jsonl
 from .plan import EvolutionPlan
+from .profile_evolution import ProfileEvolutionResult, evaluate_profile
 from .repair import RepairCollection, collect_failed_task_repairs
 from .types import EvaluationReport, EvolutionConfig
-
-
-@dataclass(slots=True)
-class ModelEvolutionResult:
-    decision: str
-    outcome_type: str
-    reason: str
-    candidate_report: EvaluationReport | None
-    promotion_parent_report: EvaluationReport | None
-    candidate: dict[str, Any]
 
 
 class AdapterRuntime(Protocol):
@@ -90,11 +81,11 @@ def build_training_dataset(
         (str(row["task_id"]), int(row["repair_attempt"])): bool(
             row.get("passed", row.get("status") == "pass")
         )
-        for row in _read_jsonl(repair_dir / "results.jsonl")
+        for row in read_jsonl(repair_dir / "results.jsonl", missing_ok=True)
     }
     repaired_examples: list[dict[str, Any]] = []
     selected_repairs: set[str] = set()
-    for row in _read_jsonl(repair_dir / "generations.jsonl"):
+    for row in read_jsonl(repair_dir / "generations.jsonl", missing_ok=True):
         task_id = str(row["task_id"])
         key = (task_id, int(row["repair_attempt"]))
         if (
@@ -110,12 +101,12 @@ def build_training_dataset(
 
     parent_passed = {
         str(row["task_id"])
-        for row in _read_jsonl(parent / "results.jsonl")
+        for row in read_jsonl(parent / "results.jsonl", missing_ok=True)
         if row.get("passed", row.get("status") == "pass")
     }
     replay_examples = [
         {"task_id": row["task_id"], "source": "replay", "messages": row["messages"]}
-        for row in _read_jsonl(parent / "generations.jsonl")
+        for row in read_jsonl(parent / "generations.jsonl", missing_ok=True)
         if str(row.get("task_id")) in parent_passed and row.get("messages")
     ]
     examples = [*repaired_examples, *replay_examples][:limit]
@@ -148,7 +139,7 @@ def evolve_model(
     diagnosis: Diagnosis,
     plan: EvolutionPlan,
     runtime: AdapterRuntime | None = None,
-) -> ModelEvolutionResult:
+) -> ProfileEvolutionResult:
     """Train, load, evaluate, and either retain or remove one LoRA candidate."""
     runtime = runtime or VLLMAdapterRuntime(config.base_url)
     model_dir = generation_dir / "model"
@@ -209,7 +200,7 @@ def evolve_model(
             if not repairs.failed_tasks
             else "no selected failed task produced a verifier-passing repair trajectory"
         )
-        return ModelEvolutionResult(
+        return ProfileEvolutionResult(
             "rejected",
             "model_training_skipped",
             reason,
@@ -239,87 +230,43 @@ def evolve_model(
     _run_training(config, train_config_path, train_log)
     candidate["train_log"] = str(train_log)
 
-    try:
-        _activate_candidate(
-            runtime,
-            evaluator,
-            candidate_name,
-            adapter_path,
-            parent_adapter,
-        )
-        candidate_report = evaluator.evaluate(model_dir / "screening" / "evaluation")
-        candidate["screening_task_changes"] = task_changes(
-            parent_report.output_dir,
-            candidate_report.output_dir,
-        )
-        if candidate_report.task_score <= parent_report.task_score:
-            _restore_parent(
+    def activate(candidate_record: dict[str, Any] | None) -> None:
+        if candidate_record:
+            _activate_candidate(
                 runtime,
                 evaluator,
-                config.model,
-                parent_adapter,
                 candidate_name,
+                adapter_path,
+                parent_adapter,
             )
-            return ModelEvolutionResult(
-                "rejected",
-                "benchmark_rejected",
-                (
-                    f"candidate screening: pass@1 {candidate_report.task_score:.6f} "
-                    f"did not exceed parent {parent_report.task_score:.6f}"
-                ),
-                candidate_report,
-                None,
-                candidate,
-            )
+        else:
+            _activate_parent(runtime, evaluator, config.model, parent_adapter, candidate_name)
 
-        _activate_parent(runtime, evaluator, config.model, parent_adapter, candidate_name)
-        fresh_parent = evaluator.evaluate(model_dir / "promotion" / "parent" / "evaluation")
-        _activate_candidate(
-            runtime,
-            evaluator,
-            candidate_name,
-            adapter_path,
-            parent_adapter,
+    evaluation = evaluate_profile(
+        parent_report,
+        evaluator,
+        model_dir,
+        None,
+        candidate,
+        activate,
+    )
+    if evaluation.candidate_report:
+        comparison_parent = evaluation.promotion_parent_report or parent_report
+        key = (
+            "promotion_task_changes"
+            if evaluation.promotion_parent_report
+            else "screening_task_changes"
         )
-        confirmed = evaluator.evaluate(model_dir / "promotion" / "candidate" / "evaluation")
-        candidate["promotion_task_changes"] = task_changes(
-            fresh_parent.output_dir,
-            confirmed.output_dir,
+        candidate[key] = task_changes(
+            comparison_parent.output_dir,
+            evaluation.candidate_report.output_dir,
         )
-    except BaseException:
-        _restore_parent(
-            runtime,
-            evaluator,
-            config.model,
-            parent_adapter,
-            candidate_name,
-        )
-        raise
-    if confirmed.task_score <= fresh_parent.task_score:
-        _restore_parent(
-            runtime,
-            evaluator,
-            config.model,
-            parent_adapter,
-            candidate_name,
-        )
-        return ModelEvolutionResult(
-            "rejected",
-            "benchmark_rejected",
-            (
-                f"fresh promotion comparison: pass@1 {confirmed.task_score:.6f} "
-                f"did not exceed parent {fresh_parent.task_score:.6f}"
-            ),
-            confirmed,
-            fresh_parent,
-            candidate,
-        )
-    return ModelEvolutionResult(
-        "accepted",
-        "accepted",
-        "fresh promotion comparison: pass@1 strictly improved",
-        confirmed,
-        fresh_parent,
+    return ProfileEvolutionResult(
+        evaluation.decision,
+        evaluation.outcome_type,
+        evaluation.reason,
+        evaluation.candidate_report,
+        evaluation.promotion_parent_report,
         candidate,
     )
 
@@ -374,22 +321,6 @@ def _activate_candidate(
     evaluator.set_model(candidate_name)
 
 
-def _restore_parent(
-    runtime: AdapterRuntime,
-    evaluator: BenchmarkEvaluator,
-    base_model: str,
-    parent_adapter: dict[str, Any] | None,
-    candidate_name: str,
-) -> None:
-    _activate_parent(
-        runtime,
-        evaluator,
-        base_model,
-        parent_adapter,
-        candidate_name,
-    )
-
-
 def _run_training(config: EvolutionConfig, config_path: Path, log_path: Path) -> None:
     environment = {
         **os.environ,
@@ -420,26 +351,14 @@ def _run_training(config: EvolutionConfig, config_path: Path, log_path: Path) ->
     print("[evolution] LoRA training completed", flush=True)
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            item = json.loads(line)
-            if isinstance(item, dict):
-                rows.append(item)
-    return rows
-
-
 def task_changes(parent_dir: str | Path, candidate_dir: str | Path) -> dict[str, list[str]]:
     parent = {
         str(row["task_id"]): bool(row.get("passed", row.get("status") == "pass"))
-        for row in _read_jsonl(Path(parent_dir) / "results.jsonl")
+        for row in read_jsonl(Path(parent_dir) / "results.jsonl", missing_ok=True)
     }
     candidate = {
         str(row["task_id"]): bool(row.get("passed", row.get("status") == "pass"))
-        for row in _read_jsonl(Path(candidate_dir) / "results.jsonl")
+        for row in read_jsonl(Path(candidate_dir) / "results.jsonl", missing_ok=True)
     }
     shared = sorted(parent.keys() & candidate.keys())
     return {

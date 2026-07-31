@@ -19,6 +19,7 @@ from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .model_evolution import activate_saved_adapter, evolve_model
 from .mutator import mutate
 from .plan import EvolutionPlanReport, plan_evolution
+from .profile_evolution import ProfileEvolutionResult
 from .run_summary import write_run_summary
 from .tool_evolution import evolve_tools
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig, GenerationRecord
@@ -188,8 +189,9 @@ def run_one_generation(config_path: Path) -> int:
             plan_path,
             evaluator.contract,
         )
-        if plan_report.plan.primary_layer.value == "context":
-            context_result = evolve_context(
+        layer = plan_report.plan.primary_layer.value
+        if layer == "context":
+            result = evolve_context(
                 config,
                 generation,
                 generation_dir,
@@ -201,44 +203,23 @@ def run_one_generation(config_path: Path) -> int:
                 parent_context=state.get("current_context"),
                 model_name=str(state.get("current_model", config.model)),
             )
-            if context_result.decision == "accepted":
-                state["current_context"] = context_result.candidate
-                state["current_report"] = context_result.candidate_report.to_dict()
-            record = _record(
-                generation,
-                parent_commit,
-                None,
-                context_result.decision,
-                context_result.outcome_type,
-                context_result.reason,
-                [],
-                None,
-                diagnosis_path,
-                diagnosis,
-                plan_path,
-                plan_report,
-                parent_report,
-                context_result.promotion_parent_report,
-                context_result.candidate_report,
-                None,
-                [],
-                context_candidate=context_result.candidate,
-                evolution_usage=(context_result.input_tokens, context_result.output_tokens),
+            return _complete_external_generation(
+                layer,
+                result,
+                state_path=state_path,
+                state=state,
+                generation_dir=generation_dir,
+                generation=generation,
+                parent_commit=parent_commit,
+                diagnosis_path=diagnosis_path,
+                diagnosis=diagnosis,
+                plan_path=plan_path,
+                plan_report=plan_report,
+                parent_report=parent_report,
+                memory=memory,
             )
-            _finish_generation(
-                state_path,
-                state,
-                generation_dir,
-                record,
-                memory,
-                diagnosis,
-                plan_report,
-                f"Context candidate: {context_result.reason}",
-            )
-            _print_generation(record)
-            return 0
-        if plan_report.plan.primary_layer.value == "tools":
-            tool_result = evolve_tools(
+        if layer == "tools":
+            result = evolve_tools(
                 config,
                 generation,
                 generation_dir,
@@ -250,47 +231,26 @@ def run_one_generation(config_path: Path) -> int:
                 parent_profile=state.get("current_tool_profile"),
                 model_name=str(state.get("current_model", config.model)),
             )
-            if tool_result.decision == "accepted":
-                state["current_tool_profile"] = tool_result.candidate
-                state["current_report"] = tool_result.candidate_report.to_dict()
-            record = _record(
-                generation,
-                parent_commit,
-                None,
-                tool_result.decision,
-                tool_result.outcome_type,
-                tool_result.reason,
-                [],
-                None,
-                diagnosis_path,
-                diagnosis,
-                plan_path,
-                plan_report,
-                parent_report,
-                tool_result.promotion_parent_report,
-                tool_result.candidate_report,
-                None,
-                [],
-                tool_candidate=tool_result.candidate,
-                evolution_usage=(tool_result.input_tokens, tool_result.output_tokens),
+            return _complete_external_generation(
+                layer,
+                result,
+                state_path=state_path,
+                state=state,
+                generation_dir=generation_dir,
+                generation=generation,
+                parent_commit=parent_commit,
+                diagnosis_path=diagnosis_path,
+                diagnosis=diagnosis,
+                plan_path=plan_path,
+                plan_report=plan_report,
+                parent_report=parent_report,
+                memory=memory,
             )
-            _finish_generation(
-                state_path,
-                state,
-                generation_dir,
-                record,
-                memory,
-                diagnosis,
-                plan_report,
-                f"Tool candidate: {tool_result.reason}",
-            )
-            _print_generation(record)
-            return 0
-        if plan_report.plan.primary_layer.value == "model" and config.model_evolution:
+        if layer == "model" and config.model_evolution:
             selected_diagnosis = diagnosis.diagnoses[
                 plan_report.plan.target_diagnosis
             ]
-            model_result = evolve_model(
+            result = evolve_model(
                 config,
                 generation,
                 generation_dir,
@@ -301,46 +261,21 @@ def run_one_generation(config_path: Path) -> int:
                 diagnosis=selected_diagnosis,
                 plan=plan_report.plan,
             )
-            if model_result.decision == "accepted":
-                state["current_model"] = model_result.candidate["name"]
-                state["current_adapter"] = model_result.candidate
-                state["current_report"] = model_result.candidate_report.to_dict()
-            record = _record(
-                generation,
-                parent_commit,
-                None,
-                model_result.decision,
-                model_result.outcome_type,
-                model_result.reason,
-                [],
-                None,
-                diagnosis_path,
-                diagnosis,
-                plan_path,
-                plan_report,
-                parent_report,
-                model_result.promotion_parent_report,
-                model_result.candidate_report,
-                None,
-                [],
-                model_candidate=model_result.candidate,
+            return _complete_external_generation(
+                layer,
+                result,
+                state_path=state_path,
+                state=state,
+                generation_dir=generation_dir,
+                generation=generation,
+                parent_commit=parent_commit,
+                diagnosis_path=diagnosis_path,
+                diagnosis=diagnosis,
+                plan_path=plan_path,
+                plan_report=plan_report,
+                parent_report=parent_report,
+                memory=memory,
             )
-            summary = (
-                f"LoRA candidate {model_result.candidate['name']}: "
-                f"{model_result.reason}"
-            )
-            _finish_generation(
-                state_path,
-                state,
-                generation_dir,
-                record,
-                memory,
-                diagnosis,
-                plan_report,
-                summary,
-            )
-            _print_generation(record)
-            return 0
         selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
         mutation_layers = {
             selected_diagnosis.primary_layer.value,
@@ -499,6 +434,83 @@ def run_one_generation(config_path: Path) -> int:
             {"error_type": type(error).__name__, "error": str(error)},
         )
         raise
+
+
+def _complete_external_generation(
+    layer: str,
+    result: ProfileEvolutionResult,
+    *,
+    state_path: Path,
+    state: dict[str, Any],
+    generation_dir: Path,
+    generation: int,
+    parent_commit: str,
+    diagnosis_path: Path,
+    diagnosis: DiagnosisReport,
+    plan_path: Path,
+    plan_report: EvolutionPlanReport,
+    parent_report: EvaluationReport,
+    memory: EvolutionMemory,
+) -> int:
+    candidate_fields = {
+        "model_candidate": None,
+        "context_candidate": None,
+        "tool_candidate": None,
+    }
+    candidate_fields[
+        {
+            "model": "model_candidate",
+            "context": "context_candidate",
+            "tools": "tool_candidate",
+        }[layer]
+    ] = result.candidate
+    if result.decision == "accepted":
+        state["current_report"] = result.candidate_report.to_dict()
+        if layer == "model":
+            state["current_model"] = result.candidate["name"]
+            state["current_adapter"] = result.candidate
+        elif layer == "context":
+            state["current_context"] = result.candidate
+        elif layer == "tools":
+            state["current_tool_profile"] = result.candidate
+
+    record = _record(
+        generation,
+        parent_commit,
+        None,
+        result.decision,
+        result.outcome_type,
+        result.reason,
+        [],
+        None,
+        diagnosis_path,
+        diagnosis,
+        plan_path,
+        plan_report,
+        parent_report,
+        result.promotion_parent_report,
+        result.candidate_report,
+        None,
+        [],
+        evolution_usage=(
+            int(getattr(result, "input_tokens", 0)),
+            int(getattr(result, "output_tokens", 0)),
+        ),
+        **candidate_fields,
+    )
+    label = "LoRA" if layer == "model" else layer.capitalize()
+    _finish_generation(
+        state_path,
+        state,
+        generation_dir,
+        record,
+        memory,
+        diagnosis,
+        plan_report,
+        f"{label} candidate: {result.reason}",
+    )
+    _print_generation(record)
+    return 0
 
 
 def _load_or_create_state(
