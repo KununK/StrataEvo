@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,7 @@ def evolve_profile(
         raise ValueError("max_evaluations must be positive")
     write_json(output_dir / "parent.json", normalized_parent)
     feedback: list[dict[str, Any]] = []
+    seen_candidates: dict[str, int] = {}
     best: tuple[dict[str, Any], dict[str, Any], EvaluationReport] | None = None
     input_tokens = 0
     output_tokens = 0
@@ -83,6 +85,23 @@ def evolve_profile(
                 write_json(attempt_dir / "result.json", observation)
                 write_json(output_dir / "refinement.json", feedback)
                 continue
+
+            candidate_key = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
+            if candidate_key in seen_candidates:
+                observation = {
+                    "attempt": attempt,
+                    "outcome_type": "duplicate_candidate",
+                    "reason": (
+                        f"{label} candidate repeats attempt "
+                        f"{seen_candidates[candidate_key]}"
+                    ),
+                    "candidate": candidate,
+                }
+                feedback.append(observation)
+                write_json(attempt_dir / "result.json", observation)
+                write_json(output_dir / "refinement.json", feedback)
+                continue
+            seen_candidates[candidate_key] = attempt
 
             print(
                 f"[evolution] {label} candidate screening {attempt}/{max_evaluations}",
@@ -117,6 +136,7 @@ def evolve_profile(
                 active_parent,
                 candidate_record,
                 activate,
+                parent_report.task_score,
             )
             return ProfileEvolutionResult(
                 evaluation.decision,
@@ -174,6 +194,7 @@ def confirm_profile(
     parent: dict[str, Any] | None,
     candidate: dict[str, Any],
     activate: Callable[[dict[str, Any] | None], None],
+    recorded_parent_score: float,
 ) -> ProfileEvaluation:
     """Compare one screened profile with a fresh parent and restore it on rejection."""
     try:
@@ -185,14 +206,15 @@ def confirm_profile(
         activate(parent)
         raise
 
-    if confirmed.task_score <= fresh_parent.task_score:
+    if confirmed.task_score <= max(recorded_parent_score, fresh_parent.task_score):
         activate(parent)
         return ProfileEvaluation(
             "rejected",
             "benchmark_rejected",
             (
                 f"fresh promotion comparison: pass@1 {confirmed.task_score:.6f} "
-                f"did not exceed parent {fresh_parent.task_score:.6f}"
+                f"must exceed stored parent {recorded_parent_score:.6f} "
+                f"and fresh parent {fresh_parent.task_score:.6f}"
             ),
             confirmed,
             fresh_parent,
@@ -200,7 +222,7 @@ def confirm_profile(
     return ProfileEvaluation(
         "accepted",
         "accepted",
-        "fresh promotion comparison: pass@1 strictly improved",
+        "fresh promotion comparison: pass@1 strictly improved over stored and fresh parent",
         confirmed,
         fresh_parent,
     )
@@ -231,7 +253,14 @@ def evaluate_profile(
                 None,
             )
 
-        return confirm_profile(evaluator, output_dir, parent, candidate, activate)
+        return confirm_profile(
+            evaluator,
+            output_dir,
+            parent,
+            candidate,
+            activate,
+            parent_report.task_score,
+        )
     except BaseException:
         activate(parent)
         raise

@@ -34,11 +34,13 @@ class FakeEvaluator:
     def __init__(self, scores):
         self.scores = iter(scores)
         self.contexts = []
+        self.evaluations = []
 
     def set_context(self, context):
         self.contexts.append(context)
 
     def evaluate(self, output_dir):
+        self.evaluations.append(str(output_dir))
         score = next(self.scores)
         return EvaluationReport(score, {}, str(output_dir), "evaluation.log")
 
@@ -248,6 +250,66 @@ class ContextEvolutionTests(unittest.TestCase):
         self.assertEqual(result.decision, "rejected")
         self.assertEqual(result.candidate_report.task_score, 0.4)
         self.assertEqual(result.candidate["system_prompt_addendum"], "First attempt.")
+        self.assertEqual(evaluator.contexts[-1], parent)
+
+    def test_duplicate_candidates_are_not_re_evaluated(self):
+        response = json.dumps({"system_prompt_addendum": "Same candidate."})
+        model = ScriptedModel([Message("assistant", response) for _ in range(3)])
+        evaluator = FakeEvaluator([0.4])
+        with tempfile.TemporaryDirectory() as directory:
+            generation_dir = Path(directory) / "generation-0001"
+            result = evolve_context(
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=3),
+                1,
+                generation_dir,
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
+                evaluator,
+                self._diagnosis(),
+                self._plan(),
+                [],
+                parent_context=None,
+                model_name="test-model",
+                model=model,
+            )
+            feedback = json.loads(
+                (generation_dir / "context/refinement.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result.decision, "rejected")
+        self.assertEqual(len(evaluator.evaluations), 1)
+        self.assertEqual(
+            [item["outcome_type"] for item in feedback],
+            ["evaluated", "duplicate_candidate", "duplicate_candidate"],
+        )
+
+    def test_confirmation_must_exceed_recorded_parent(self):
+        model = ScriptedModel(
+            [Message("assistant", json.dumps({"system_prompt_addendum": "Candidate."}))]
+        )
+        evaluator = FakeEvaluator([0.6, 0.4, 0.45])
+        parent = {
+            "system_prompt_addendum": "Parent.",
+            "task_prompt_addendum": "",
+            "path": "parent.json",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            result = evolve_context(
+                EvolutionConfig(repo=directory, run_name="test", max_eval_attempts=1),
+                1,
+                Path(directory) / "generation-0001",
+                EvaluationReport(0.5, {}, "parent", "parent.log"),
+                evaluator,
+                self._diagnosis(),
+                self._plan(),
+                [],
+                parent_context=parent,
+                model_name="test-model",
+                model=model,
+            )
+
+        self.assertEqual(result.decision, "rejected")
+        self.assertEqual(result.candidate_report.task_score, 0.45)
+        self.assertIn("stored parent 0.500000", result.reason)
         self.assertEqual(evaluator.contexts[-1], parent)
 
     def test_benchmark_prompt_loader_appends_both_context_fields(self):

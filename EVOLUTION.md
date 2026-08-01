@@ -396,6 +396,10 @@ Context 候选不能包含任务 ID、具体解答、hidden tests 或 repair 代
 context；全部候选拒绝或发生异常时 evaluator 恢复父代。Context 文件保存在 run artifact 中，
 不修改源码，因此不产生 Git commit。
 
+候选按规范化 JSON 内容去重，完全相同的 profile 只记录反馈而不重复运行 benchmark。新鲜
+复测中的候选还必须超过进入本代时已记录的父代分数，避免 fresh parent 的偶然低分导致状态
+倒退。
+
 可以使用 `--force-layer context` 单独验证该执行器。正式实验省略该参数，由四层 Diagnosis
 和 Evolution Plan 决定是否选择 context。
 

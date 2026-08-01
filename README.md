@@ -217,7 +217,8 @@ Context Evolution 将通用提示词增量保存为独立 `ContextProfile`，而
 固定基础提示词。候选经过 screening 和新鲜父子复测；接受后写入 `state.json` 和
 `evolution_memory.jsonl`，拒绝则恢复父代 context。它不会产生 Git evolution commit。
 screening 未提升时，同一代会将候选、分数差和任务变化反馈给 Context Evolver 继续生成；
-最多使用 `--max-eval-attempts` 个候选，首个超过父代的候选再进入一次新鲜父子复测。
+最多使用 `--max-eval-attempts` 个候选，内容重复的候选不会再次运行 benchmark。首个超过父代
+的候选再进入一次新鲜父子复测，确认分数必须同时超过已记录父代和新鲜父代才能接受。
 
 最小链路测试可以使用：
 
