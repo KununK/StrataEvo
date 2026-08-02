@@ -7,7 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .types import GenerationRecord
+from .evaluation import promotion_observation
+from .types import EvaluationReport, GenerationRecord
 
 if TYPE_CHECKING:
     from .diagnosis import DiagnosisReport
@@ -307,7 +308,15 @@ class EvolutionMemoryEntry:
             tool_candidate=record.tool_candidate,
             outcome=outcome,
         )
-        entry.causal_trace = _causal_trace(entry, diagnosis)
+        promotion = (
+            promotion_observation(
+                EvaluationReport.from_dict(record.parent_report),
+                EvaluationReport.from_dict(candidate),
+            )
+            if candidate
+            else None
+        )
+        entry.causal_trace = _causal_trace(entry, diagnosis, promotion)
         return entry
 
 
@@ -485,6 +494,7 @@ def _executed_intervention(entry: EvolutionMemoryEntry) -> dict[str, Any]:
 def _causal_trace(
     entry: EvolutionMemoryEntry,
     diagnosis: DiagnosisReport,
+    promotion: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     target = int(entry.plan.get("target_diagnosis", 0))
     selected = diagnosis.diagnoses[target]
@@ -526,6 +536,7 @@ def _causal_trace(
             "decision": entry.decision,
             "outcome_type": entry.outcome_type,
             "score_delta": entry.outcome.score_delta,
+            "promotion": promotion,
             "expected_outcomes": entry.outcome_observations,
         },
     }
@@ -545,7 +556,7 @@ def _causal_trace_context(trace: dict[str, Any]) -> dict[str, Any]:
     if isinstance(observed, dict):
         observed = {
             key: observed.get(key)
-            for key in ("decision", "outcome_type", "score_delta")
+            for key in ("decision", "outcome_type", "score_delta", "promotion")
         }
     return {
         "evidence_events": [

@@ -118,7 +118,7 @@ class ContextEvolutionTests(unittest.TestCase):
             )
 
             self.assertEqual(result.decision, "accepted")
-            self.assertEqual(result.candidate_report.task_score, 0.7)
+            self.assertEqual(result.candidate_report.task_score, 0.6)
             self.assertTrue(Path(result.candidate["path"]).is_file())
             self.assertEqual(evaluator.contexts[-1], result.candidate)
             candidate = json.loads(
@@ -282,11 +282,11 @@ class ContextEvolutionTests(unittest.TestCase):
             ["evaluated", "duplicate_candidate", "duplicate_candidate"],
         )
 
-    def test_confirmation_must_exceed_recorded_parent(self):
+    def test_single_screening_uses_recorded_parent(self):
         model = ScriptedModel(
             [Message("assistant", json.dumps({"system_prompt_addendum": "Candidate."}))]
         )
-        evaluator = FakeEvaluator([0.6, 0.4, 0.45])
+        evaluator = FakeEvaluator([0.6])
         parent = {
             "system_prompt_addendum": "Parent.",
             "task_prompt_addendum": "",
@@ -307,10 +307,10 @@ class ContextEvolutionTests(unittest.TestCase):
                 model=model,
             )
 
-        self.assertEqual(result.decision, "rejected")
-        self.assertEqual(result.candidate_report.task_score, 0.45)
-        self.assertIn("stored parent 0.500000", result.reason)
-        self.assertEqual(evaluator.contexts[-1], parent)
+        self.assertEqual(result.decision, "accepted")
+        self.assertEqual(result.candidate_report.task_score, 0.6)
+        self.assertEqual(len(evaluator.evaluations), 1)
+        self.assertEqual(evaluator.contexts[-1], result.candidate)
 
     def test_benchmark_prompt_loader_appends_both_context_fields(self):
         with tempfile.TemporaryDirectory() as directory:

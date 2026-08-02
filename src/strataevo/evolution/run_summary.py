@@ -103,8 +103,8 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
             "",
             "Alignment is observational and checks the selected layer only.",
             "",
-            "| Generation | Failure mechanism | Target | Executed change | Alignment |",
-            "| ---: | --- | --- | --- | --- |",
+            "| Generation | Failure mechanism | Target | Executed change | Promotion | Alignment |",
+            "| ---: | --- | --- | --- | --- | --- |",
         ]
     )
     for item in summary["generations"]:
@@ -113,6 +113,7 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"| {item['generation']} | {_cell(trace.get('failure_mechanism'))} | "
             f"{_cell(trace.get('target_component'))} | "
             f"{_cell(_executed_summary(trace.get('executed_change')))} | "
+            f"{_cell(_promotion_summary(trace))} | "
             f"{item['causal_alignment']} |"
         )
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -147,3 +148,13 @@ def _executed_summary(value: Any) -> str:
     if change_type == "tool_profile":
         return f"tool_profile: {', '.join(value.get('description_addenda', {}))}"
     return change_type
+
+
+def _promotion_summary(trace: dict[str, Any]) -> str:
+    observed = trace.get("observed_effect")
+    promotion = observed.get("promotion") if isinstance(observed, dict) else None
+    if not isinstance(promotion, dict):
+        return "-"
+    gain = promotion.get("passed_gain")
+    required = promotion.get("required_pass_gain")
+    return f"passed gain {gain}/{required}" if gain is not None else "score fallback"

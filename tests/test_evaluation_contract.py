@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from strataevo.evolution.attempts import CandidateEvaluationSession
-from strataevo.evolution.cli import _promotion_decision
 from strataevo.evolution.contract import EvaluationContract
+from strataevo.evolution.evaluation import promotion_decision
 from strataevo.evolution.git import GitRepository
 from strataevo.evolution.types import EvaluationReport
 
@@ -69,14 +69,8 @@ class EvaluationContractTests(unittest.TestCase):
             self.assertEqual(feedback["working_tree_state"], "parent")
             self.assertEqual(repository.changed_paths(), [])
 
-    def test_selected_candidate_uses_fresh_promotion_comparison(self):
-        reports = iter(
-            [
-                EvaluationReport(0.9, {}, "selection", "selection.log"),
-                EvaluationReport(0.8, {}, "fresh-parent", "fresh-parent.log"),
-                EvaluationReport(0.7, {}, "confirmation", "confirmation.log"),
-            ]
-        )
+    def test_selected_candidate_uses_its_single_screening_report(self):
+        reports = iter([EvaluationReport(0.9, {}, "selection", "selection.log")])
         with self._repository(reports) as (root, repository, evaluator):
             agent = root / "src/tinyagent/agent.py"
             agent.write_text("VERSION = 1\n", encoding="utf-8")
@@ -85,11 +79,11 @@ class EvaluationContractTests(unittest.TestCase):
             best = session.restore_best()
             assert best is not None
 
-            parent, candidate = session.confirm(best)
+            candidate = EvaluationReport.from_dict(best.report)
 
-            self.assertFalse(_promotion_decision(parent, candidate)[0])
+            self.assertTrue(promotion_decision(session.parent_report, candidate)[0])
             self.assertEqual(agent.read_text(encoding="utf-8"), "VERSION = 1\n")
-            self.assertTrue((root / "attempts/promotion/comparison.json").is_file())
+            self.assertFalse((root / "attempts/promotion").exists())
 
     @staticmethod
     def _session(root, repository, evaluator):

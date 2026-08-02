@@ -7,15 +7,18 @@ from unittest.mock import patch
 
 from strataevo.evolution.attempts import CandidateEvaluationSession
 from strataevo.evolution.cli import (
-    _confirmed_promotion_decision,
     _prepare_generation_dir,
-    _promotion_decision,
     _validate_args,
     parse_args,
     run_one_generation,
 )
 from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
+from strataevo.evolution.evaluation import (
+    promotion_decision,
+    promotion_observation,
+    required_pass_gain,
+)
 from strataevo.evolution.git import GitRepository
 from strataevo.evolution.mutator import _round_step_budget, _run_refinement_session
 from strataevo.evolution.plan import (
@@ -333,24 +336,20 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
             self.assertEqual(session.evaluations_used, 2)
 
-    def test_promotion_requires_strictly_higher_task_score(self):
-        parent = EvaluationReport(0.8, {}, "parent", "parent.log")
-        better_score = EvaluationReport(0.9, {}, "candidate", "candidate.log")
-        worse_score = EvaluationReport(0.7, {}, "candidate", "candidate.log")
-        equal_score = EvaluationReport(0.8, {}, "candidate", "candidate.log")
+    def test_promotion_requires_one_percent_passed_gain_rounded_down(self):
+        self.assertEqual(required_pass_gain(16), 1)
+        self.assertEqual(required_pass_gain(148), 1)
+        self.assertEqual(required_pass_gain(206), 2)
+        parent = EvaluationReport(206 / 257, {"passed": 206}, "parent", "parent.log")
+        one_more = EvaluationReport(207 / 257, {"passed": 207}, "one", "one.log")
+        two_more = EvaluationReport(208 / 257, {"passed": 208}, "two", "two.log")
 
-        self.assertTrue(_promotion_decision(parent, better_score)[0])
-        self.assertFalse(_promotion_decision(parent, worse_score)[0])
-        self.assertFalse(_promotion_decision(parent, equal_score)[0])
-
-    def test_confirmed_promotion_must_exceed_stored_and_fresh_parent(self):
-        stored = EvaluationReport(0.9, {}, "stored", "stored.log")
-        fresh = EvaluationReport(0.7, {}, "fresh", "fresh.log")
-        below_stored = EvaluationReport(0.8, {}, "candidate", "candidate.log")
-        above_both = EvaluationReport(0.95, {}, "candidate", "candidate.log")
-
-        self.assertFalse(_confirmed_promotion_decision(stored, fresh, below_stored)[0])
-        self.assertTrue(_confirmed_promotion_decision(stored, fresh, above_both)[0])
+        self.assertFalse(promotion_decision(parent, one_more)[0])
+        self.assertTrue(promotion_decision(parent, two_more)[0])
+        observation = promotion_observation(parent, one_more)
+        self.assertEqual(observation["passed_gain"], 1)
+        self.assertEqual(observation["required_pass_gain"], 2)
+        self.assertFalse(observation["accepted"])
 
     def test_incomplete_generation_is_archived_before_retry(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -626,8 +625,6 @@ class EvolutionTests(unittest.TestCase):
                     EvaluationReport(0.5, {}, "parent", "parent.log"),
                     EvaluationReport(0.7, {}, "first", "first.log"),
                     EvaluationReport(0.6, {}, "second", "second.log"),
-                    EvaluationReport(0.5, {}, "fresh-parent", "fresh-parent.log"),
-                    EvaluationReport(0.65, {}, "confirmed-child", "confirmed-child.log"),
                 ]
             )
 
@@ -673,9 +670,9 @@ class EvolutionTests(unittest.TestCase):
             record = json.loads(
                 (run_dir / "generation-0001/record.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(record["candidate_report"]["task_score"], 0.65)
-            self.assertEqual(record["promotion_parent_report"]["task_score"], 0.5)
-            self.assertIn("stored and fresh parent", record["reason"])
+            self.assertEqual(record["candidate_report"]["task_score"], 0.7)
+            self.assertIsNone(record["promotion_parent_report"])
+            self.assertIn("candidate screening", record["reason"])
             self.assertEqual(len(record["evaluation_attempts"]), 2)
             self.assertEqual(
                 [item["report"]["task_score"] for item in record["evaluation_attempts"]],
@@ -849,11 +846,9 @@ class EvolutionTests(unittest.TestCase):
             result = ProfileEvolutionResult(
                 decision="accepted",
                 outcome_type="accepted",
-                reason="fresh promotion comparison: pass@1 strictly improved",
+                reason="candidate screening: pass@1 strictly improved",
                 candidate_report=candidate_report,
-                promotion_parent_report=EvaluationReport(
-                    0.5, {}, "fresh-parent", "fresh-parent.log"
-                ),
+                promotion_parent_report=None,
                 candidate=context_candidate,
                 input_tokens=12,
                 output_tokens=4,

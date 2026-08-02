@@ -85,7 +85,7 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn('"prior_evolution"', request)
         self.assertIn("task score did not improve", request)
         self.assertIn('"passed": false', request)
-        self.assertIn('"requires_strict_improvement": true', request)
+        self.assertIn('"single candidate evaluation against recorded parent"', request)
         self.assertIn('"executor_capabilities"', request)
         self.assertIn('"write_file"', request)
         self.assertIn('"run_shell"', request)

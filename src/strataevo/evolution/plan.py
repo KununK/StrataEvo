@@ -13,6 +13,7 @@ from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 from .capabilities import executor_capabilities
 from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport, EvolutionLayer
+from .evaluation import required_pass_gain
 from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
 from .structured import request_json
@@ -198,8 +199,9 @@ class EvolutionPlanner:
             "available_metrics": available_metrics,
             "promotion_policy": {
                 "primary_metric": "task_score",
-                "requires_strict_improvement": True,
+                "comparison": "single candidate evaluation against recorded parent",
                 "parent_task_score": parent_report.task_score,
+                "minimum_passed_gain": _minimum_passed_gain(parent_report),
             },
             "repository": {
                 "mutable_paths": mutable_paths,
@@ -262,9 +264,9 @@ must affect direct_paths, not deferred or unclassified paths. Model, context, an
 are external artifacts and therefore have empty likely_files. Architecture candidates use existing
 or plausible files below repository.mutable_paths.
 
-Every plan needs at least one outcome using an exact available_metrics key. Promotion requires
-strict task-score improvement; speculative future value belongs only in expected_long_term_value
-and prerequisites.
+Every plan needs at least one outcome using an exact available_metrics key. Promotion requires the
+configured minimum passed-task gain; speculative future value belongs only in
+expected_long_term_value and prerequisites.
 When forced_layer is not null, select a diagnosis whose primary_layer exactly matches it.
 
 Return exactly this JSON object:
@@ -335,6 +337,11 @@ def evaluation_metrics(report: dict[str, Any]) -> dict[str, float]:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             values[f"signal:{name}"] = float(value)
     return dict(sorted(values.items()))
+
+
+def _minimum_passed_gain(report: EvaluationReport) -> int | None:
+    passed = report.metrics.get("passed")
+    return required_pass_gain(passed) if isinstance(passed, int) else None
 
 
 def mutable_source_files(repo: str | Path, mutable_paths: list[str]) -> list[str]:

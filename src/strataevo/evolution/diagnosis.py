@@ -136,7 +136,7 @@ class EvidenceDiagnoser:
             "promotion_objective": {
                 "metric": "task_score",
                 "meaning": "pass@1",
-                "requires_strict_improvement": True,
+                "comparison": "single candidate evaluation against recorded parent",
             },
             "executor_capabilities": capabilities or {},
             "cases": [],

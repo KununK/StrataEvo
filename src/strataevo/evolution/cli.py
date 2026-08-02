@@ -12,7 +12,13 @@ from typing import Any
 from .attempts import CandidateEvaluationSession
 from .context_evolution import evolve_context
 from .diagnosis import DiagnosisReport, diagnose_evaluation
-from .evaluation import BENCHMARKS, Evaluator, create_evaluator, validation_commands
+from .evaluation import (
+    BENCHMARKS,
+    Evaluator,
+    create_evaluator,
+    promotion_decision,
+    validation_commands,
+)
 from .git import GitRepository
 from .io import read_json, write_json
 from .memory import EvolutionMemory, EvolutionMemoryEntry
@@ -367,20 +373,9 @@ def run_one_generation(config_path: Path) -> int:
         changed_paths = best_attempt.changed_paths
         patch_path = Path(best_attempt.patch_path) if best_attempt.patch_path else None
         selection_report = EvaluationReport.from_dict(best_attempt.report)
-        eligible, reason = _promotion_decision(parent_report, selection_report)
-        promotion_parent_report: EvaluationReport | None = None
+        accepted, reason = promotion_decision(parent_report, selection_report)
         candidate_report = selection_report
-        if eligible:
-            promotion_parent_report, candidate_report = candidate_session.confirm(best_attempt)
-            accepted, reason = _confirmed_promotion_decision(
-                parent_report,
-                promotion_parent_report,
-                candidate_report,
-            )
-            reason = f"fresh promotion comparison: {reason}"
-        else:
-            accepted = False
-            reason = f"candidate screening: {reason}"
+        reason = f"candidate screening: {reason}"
         if accepted:
             resulting_commit = git.commit(
                 f"evolve: generation {generation} pass@1 {candidate_report.task_score:.6f}"
@@ -406,7 +401,7 @@ def run_one_generation(config_path: Path) -> int:
             plan_path,
             plan_report,
             parent_report,
-            promotion_parent_report,
+            None,
             candidate_report,
             agent_result,
             attempts,
@@ -556,30 +551,6 @@ def _load_or_create_state(
     }
     write_json(path, state)
     return state
-
-
-def _promotion_decision(
-    parent: EvaluationReport,
-    candidate: EvaluationReport,
-) -> tuple[bool, str]:
-    if candidate.task_score <= parent.task_score:
-        return False, (
-            f"pass@1 {candidate.task_score:.6f} did not exceed parent {parent.task_score:.6f}"
-        )
-    return True, "pass@1 strictly improved"
-
-
-def _confirmed_promotion_decision(
-    stored_parent: EvaluationReport,
-    fresh_parent: EvaluationReport,
-    candidate: EvaluationReport,
-) -> tuple[bool, str]:
-    if candidate.task_score <= max(stored_parent.task_score, fresh_parent.task_score):
-        return False, (
-            f"pass@1 {candidate.task_score:.6f} must exceed stored parent "
-            f"{stored_parent.task_score:.6f} and fresh parent {fresh_parent.task_score:.6f}"
-        )
-    return True, "pass@1 strictly improved over stored and fresh parent"
 
 
 def _record(

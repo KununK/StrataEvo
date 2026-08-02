@@ -79,7 +79,7 @@ class ModelEvolutionTests(unittest.TestCase):
             [1, 2, 3],
         )
 
-    def test_accepts_confirmed_lora_candidate(self):
+    def test_accepts_screened_lora_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             evaluation = root / "parent"
@@ -106,11 +106,7 @@ class ModelEvolutionTests(unittest.TestCase):
                 model_evolution=True,
             )
             parent = EvaluationReport(0.5, {}, str(evaluation), "parent.log")
-            reports = [
-                EvaluationReport(0.6, {}, "", "screening.log"),
-                EvaluationReport(0.5, {}, "", "fresh-parent.log"),
-                EvaluationReport(0.7, {}, "", "confirmed.log"),
-            ]
+            reports = [EvaluationReport(0.6, {}, "", "screening.log")]
             evaluator = FakeEvaluator(reports)
             runtime = FakeRuntime()
             diagnosis, plan = self._model_direction()
@@ -156,7 +152,8 @@ class ModelEvolutionTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.decision, "accepted")
-            self.assertEqual(result.candidate_report.task_score, 0.7)
+            self.assertEqual(result.candidate_report.task_score, 0.6)
+            self.assertIsNone(result.promotion_parent_report)
             self.assertEqual(result.candidate["training_examples"], 2)
             self.assertEqual(
                 result.candidate["repair_collection"]["repaired_tasks"],

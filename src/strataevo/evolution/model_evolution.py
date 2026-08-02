@@ -251,14 +251,8 @@ def evolve_model(
         activate,
     )
     if evaluation.candidate_report:
-        comparison_parent = evaluation.promotion_parent_report or parent_report
-        key = (
-            "promotion_task_changes"
-            if evaluation.promotion_parent_report
-            else "screening_task_changes"
-        )
-        candidate[key] = task_changes(
-            comparison_parent.output_dir,
+        candidate["screening_task_changes"] = task_changes(
+            parent_report.output_dir,
             evaluation.candidate_report.output_dir,
         )
     return ProfileEvolutionResult(

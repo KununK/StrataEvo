@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .contract import ChangeImpact
-from .evaluation import Evaluator, run_commands
+from .evaluation import Evaluator, promotion_observation, run_commands
 from .git import GitRepository
 from .io import write_json
 from .semantics import classify_changes
@@ -255,28 +255,6 @@ class CandidateEvaluationSession:
         self._restore(best)
         return best
 
-    def confirm(self, attempt: EvaluationAttempt) -> tuple[EvaluationReport, EvaluationReport]:
-        """Compare parent and selected candidate on fresh, unselected benchmark runs."""
-        if not attempt.patch_path or attempt.report is None:
-            raise ValueError("only an evaluated candidate can be confirmed")
-        promotion_dir = self.generation_dir / "promotion"
-        promotion_dir.mkdir(parents=True, exist_ok=False)
-        print("[evolution] promotion check: re-evaluating parent", flush=True)
-        self._restore(None)
-        parent = self.evaluator.evaluate(promotion_dir / "parent" / "evaluation")
-        print("[evolution] promotion check: confirming candidate", flush=True)
-        self._restore(attempt)
-        candidate = self.evaluator.evaluate(promotion_dir / "candidate" / "evaluation")
-        write_json(
-            promotion_dir / "comparison.json",
-            {
-                "selection_report": attempt.report,
-                "parent_report": parent.to_dict(),
-                "candidate_report": candidate.to_dict(),
-            },
-        )
-        return parent, candidate
-
     def to_dicts(self) -> list[dict]:
         return [attempt.to_dict() for attempt in self.attempts]
 
@@ -317,6 +295,14 @@ class CandidateEvaluationSession:
             "candidate_task_score": report["task_score"] if report else None,
             "evidence_path": report["metrics"].get("evidence_path") if report else None,
             "signal_counts": report["metrics"].get("evidence_signal_counts") if report else None,
+            "promotion": (
+                promotion_observation(
+                    self.parent_report,
+                    EvaluationReport.from_dict(report),
+                )
+                if report
+                else None
+            ),
             "change_impact": attempt.change_impact,
             "candidate_retained": candidate_retained,
             "working_tree_state": working_tree_state,

@@ -24,6 +24,73 @@ class Evaluator(Protocol):
     def evaluate(self, output_dir: Path) -> EvaluationReport: ...
 
 
+def promotion_observation(
+    parent: EvaluationReport,
+    candidate: EvaluationReport,
+) -> dict[str, Any]:
+    parent_passed = _passed_count(parent)
+    candidate_passed = _passed_count(candidate)
+    if parent_passed is None or candidate_passed is None:
+        return {
+            "parent_score": parent.task_score,
+            "candidate_score": candidate.task_score,
+            "score_delta": candidate.task_score - parent.task_score,
+            "parent_passed": parent_passed,
+            "candidate_passed": candidate_passed,
+            "passed_gain": None,
+            "required_pass_gain": None,
+            "accepted": candidate.task_score > parent.task_score,
+        }
+    required = required_pass_gain(parent_passed)
+    gain = candidate_passed - parent_passed
+    return {
+        "parent_score": parent.task_score,
+        "candidate_score": candidate.task_score,
+        "score_delta": candidate.task_score - parent.task_score,
+        "parent_passed": parent_passed,
+        "candidate_passed": candidate_passed,
+        "passed_gain": gain,
+        "required_pass_gain": required,
+        "accepted": gain >= required,
+    }
+
+
+def promotion_decision(
+    parent: EvaluationReport,
+    candidate: EvaluationReport,
+) -> tuple[bool, str]:
+    observation = promotion_observation(parent, candidate)
+    required = observation["required_pass_gain"]
+    if required is None:
+        accepted = bool(observation["accepted"])
+        reason = (
+            "pass@1 strictly improved"
+            if accepted
+            else f"pass@1 {candidate.task_score:.6f} did not exceed parent "
+            f"{parent.task_score:.6f}"
+        )
+        return accepted, reason
+    gain = int(observation["passed_gain"])
+    accepted = bool(observation["accepted"])
+    reason = (
+        f"passed tasks increased by {gain}, meeting required gain {required}"
+        if accepted
+        else f"passed tasks increased by {gain}; required gain is {required}"
+    )
+    return accepted, reason
+
+
+def required_pass_gain(parent_passed: int) -> int:
+    return max(1, int(parent_passed * 0.01))
+
+
+def _passed_count(report: EvaluationReport) -> int | None:
+    value = report.metrics.get("passed")
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class BenchmarkSpec:
     name: str

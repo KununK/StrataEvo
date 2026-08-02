@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .evaluation import BenchmarkEvaluator
+from .evaluation import BenchmarkEvaluator, promotion_decision, promotion_observation
 from .io import read_jsonl, write_json
 from .types import EvaluationReport
 
@@ -47,7 +47,7 @@ def evolve_profile(
     activate: Callable[[dict[str, Any] | None], None],
     max_evaluations: int,
 ) -> ProfileEvolutionResult:
-    """Refine a profile with screening feedback, then confirm its first improvement."""
+    """Refine a profile and keep the first candidate that clears promotion."""
     if max_evaluations <= 0:
         raise ValueError("max_evaluations must be positive")
     write_json(output_dir / "parent.json", normalized_parent)
@@ -116,6 +116,7 @@ def evolve_profile(
                 "outcome_type": "evaluated",
                 "task_score": screening.task_score,
                 "score_delta": screening.task_score - parent_report.task_score,
+                "promotion": promotion_observation(parent_report, screening),
                 "task_changes": {
                     name: {"count": len(tasks), "examples": tasks[:12]}
                     for name, tasks in changes.items()
@@ -127,23 +128,16 @@ def evolve_profile(
             write_json(output_dir / "refinement.json", feedback)
             if best is None or screening.task_score > best[2].task_score:
                 best = candidate_record, metadata, screening
-            if screening.task_score <= parent_report.task_score:
+            accepted, reason = promotion_decision(parent_report, screening)
+            if not accepted:
                 continue
-
-            evaluation = confirm_profile(
-                evaluator,
-                output_dir,
-                active_parent,
-                candidate_record,
-                activate,
-                parent_report.task_score,
-            )
+            activate(candidate_record)
             return ProfileEvolutionResult(
-                evaluation.decision,
-                evaluation.outcome_type,
-                evaluation.reason,
-                evaluation.candidate_report,
-                evaluation.promotion_parent_report,
+                "accepted",
+                "accepted",
+                f"candidate screening: {reason}",
+                screening,
+                None,
                 candidate_record,
                 input_tokens,
                 output_tokens,
@@ -173,60 +167,17 @@ def evolve_profile(
             **metadata,
         },
     )
+    _, reason = promotion_decision(parent_report, screening)
     return ProfileEvolutionResult(
         "rejected",
         "benchmark_rejected",
-        (
-            f"best candidate screening: pass@1 {screening.task_score:.6f} "
-            f"did not exceed parent {parent_report.task_score:.6f}"
-        ),
+        f"best candidate screening: {reason}",
         screening,
         None,
         candidate_record,
         input_tokens,
         output_tokens,
     )
-
-
-def confirm_profile(
-    evaluator: BenchmarkEvaluator,
-    output_dir: Path,
-    parent: dict[str, Any] | None,
-    candidate: dict[str, Any],
-    activate: Callable[[dict[str, Any] | None], None],
-    recorded_parent_score: float,
-) -> ProfileEvaluation:
-    """Compare one screened profile with a fresh parent and restore it on rejection."""
-    try:
-        activate(parent)
-        fresh_parent = evaluator.evaluate(output_dir / "promotion" / "parent" / "evaluation")
-        activate(candidate)
-        confirmed = evaluator.evaluate(output_dir / "promotion" / "candidate" / "evaluation")
-    except BaseException:
-        activate(parent)
-        raise
-
-    if confirmed.task_score <= max(recorded_parent_score, fresh_parent.task_score):
-        activate(parent)
-        return ProfileEvaluation(
-            "rejected",
-            "benchmark_rejected",
-            (
-                f"fresh promotion comparison: pass@1 {confirmed.task_score:.6f} "
-                f"must exceed stored parent {recorded_parent_score:.6f} "
-                f"and fresh parent {fresh_parent.task_score:.6f}"
-            ),
-            confirmed,
-            fresh_parent,
-        )
-    return ProfileEvaluation(
-        "accepted",
-        "accepted",
-        "fresh promotion comparison: pass@1 strictly improved over stored and fresh parent",
-        confirmed,
-        fresh_parent,
-    )
-
 
 def evaluate_profile(
     parent_report: EvaluationReport,
@@ -236,30 +187,26 @@ def evaluate_profile(
     candidate: dict[str, Any],
     activate: Callable[[dict[str, Any] | None], None],
 ) -> ProfileEvaluation:
-    """Screen a profile, compare it with a fresh parent, and restore on rejection."""
+    """Evaluate a profile once against the recorded parent."""
     try:
         activate(candidate)
         screening = evaluator.evaluate(output_dir / "screening" / "evaluation")
-        if screening.task_score <= parent_report.task_score:
+        accepted, reason = promotion_decision(parent_report, screening)
+        if not accepted:
             activate(parent)
             return ProfileEvaluation(
                 "rejected",
                 "benchmark_rejected",
-                (
-                    f"candidate screening: pass@1 {screening.task_score:.6f} "
-                    f"did not exceed parent {parent_report.task_score:.6f}"
-                ),
+                f"candidate screening: {reason}",
                 screening,
                 None,
             )
-
-        return confirm_profile(
-            evaluator,
-            output_dir,
-            parent,
-            candidate,
-            activate,
-            parent_report.task_score,
+        return ProfileEvaluation(
+            "accepted",
+            "accepted",
+            f"candidate screening: {reason}",
+            screening,
+            None,
         )
     except BaseException:
         activate(parent)

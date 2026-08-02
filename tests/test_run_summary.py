@@ -51,6 +51,9 @@ class RunSummaryTests(unittest.TestCase):
                     "changed_paths": ["src/tinyagent/agent.py"],
                 },
                 "alignment": {"status": "layer_aligned", "scope": "layer_only"},
+                "observed_effect": {
+                    "promotion": {"passed_gain": 1, "required_pass_gain": 2}
+                },
             },
             evaluation_attempts=[{"outcome_type": "semantic_noop"}],
             outcome=MemoryOutcome(
@@ -97,6 +100,7 @@ class RunSummaryTests(unittest.TestCase):
             self.assertIn("test hypothesis", (run_dir / "summary.md").read_text())
             self.assertIn("test intervention", (run_dir / "summary.md").read_text())
             self.assertIn("artifact deleted after validation", (run_dir / "summary.md").read_text())
+            self.assertIn("passed gain 1/2", (run_dir / "summary.md").read_text())
 
 
 if __name__ == "__main__":

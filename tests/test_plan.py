@@ -33,7 +33,8 @@ class EvolutionPlanTests(unittest.TestCase):
         self.assertIn('"available_metrics"', request)
         self.assertIn('"signal:artifact_missing": 2.0', request)
         self.assertIn('"src/tinyagent/workspace.py"', request)
-        self.assertIn('"requires_strict_improvement": true', request)
+        self.assertIn('"single candidate evaluation against recorded parent"', request)
+        self.assertIn('"minimum_passed_gain": 1', request)
         self.assertIn('"parent_task_score": 0.5', request)
 
     def test_planner_receives_executor_capabilities_without_hard_validation(self):
@@ -365,6 +366,7 @@ class EvolutionPlanTests(unittest.TestCase):
             task_score=0.5,
             metrics={
                 "average_agent_steps": 5.0,
+                "passed": 10,
                 "evidence_signal_counts": {"artifact_missing": 2},
             },
             output_dir="parent",
