@@ -167,6 +167,7 @@ class EvolutionMemoryEntry:
     agent_output: str
     parent_task_score: float
     candidate_task_score: float | None
+    causal_trace: dict[str, Any] = field(default_factory=dict)
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
     model_candidate: dict[str, Any] | None = None
     context_candidate: dict[str, Any] | None = None
@@ -202,6 +203,7 @@ class EvolutionMemoryEntry:
                 "executed_intervention": _executed_intervention(self),
                 "expected_outcomes": self.plan.get("expected_outcomes", []),
             },
+            "causal_trace": _causal_trace_context(self.causal_trace),
             "outcome": self.outcome.to_context_dict(),
             "outcome_observations": self.outcome_observations,
             "evaluation_attempts": [_attempt_context(item) for item in self.evaluation_attempts],
@@ -229,6 +231,7 @@ class EvolutionMemoryEntry:
         for legacy in ("parent_utility", "candidate_utility", "utility_delta"):
             values.pop(legacy, None)
         values.setdefault("evaluation_attempts", [])
+        values.setdefault("causal_trace", {})
         values.setdefault("model_candidate", None)
         values.setdefault("context_candidate", None)
         values.setdefault("tool_candidate", None)
@@ -279,7 +282,7 @@ class EvolutionMemoryEntry:
         if patch_path and patch_path.is_file():
             patch_excerpt = patch_path.read_text(encoding="utf-8")[:PATCH_EXCERPT_CHARS]
         outcome = _summarize_generation(record, parent, candidate)
-        return cls(
+        entry = cls(
             generation=record.generation,
             parent_commit=record.parent_commit,
             resulting_commit=record.resulting_commit,
@@ -297,12 +300,15 @@ class EvolutionMemoryEntry:
             agent_output=agent_output.strip(),
             parent_task_score=float(parent["task_score"]),
             candidate_task_score=float(candidate["task_score"]) if candidate else None,
+            causal_trace={},
             evaluation_attempts=list(record.evaluation_attempts),
             model_candidate=record.model_candidate,
             context_candidate=record.context_candidate,
             tool_candidate=record.tool_candidate,
             outcome=outcome,
         )
+        entry.causal_trace = _causal_trace(entry, diagnosis)
+        return entry
 
 
 class EvolutionMemory:
@@ -474,6 +480,90 @@ def _executed_intervention(entry: EvolutionMemoryEntry) -> dict[str, Any]:
             "patch_excerpt": entry.patch_excerpt[:PATCH_CONTEXT_CHARS],
         }
     return {"type": "none"}
+
+
+def _causal_trace(
+    entry: EvolutionMemoryEntry,
+    diagnosis: DiagnosisReport,
+) -> dict[str, Any]:
+    target = int(entry.plan.get("target_diagnosis", 0))
+    selected = diagnosis.diagnoses[target]
+    executed = _executed_intervention(entry)
+    planned_layer = str(entry.plan.get("primary_layer", ""))
+    executed_layer = {
+        "model_adapter": "model",
+        "context_profile": "context",
+        "tool_profile": "tools",
+        "source_patch": "architecture",
+    }.get(str(executed.get("type")))
+    alignment = (
+        "not_executed"
+        if executed_layer is None
+        else "layer_aligned"
+        if executed_layer == planned_layer
+        else "layer_mismatch"
+    )
+    target_component: Any = entry.plan.get("likely_files", [])
+    if planned_layer != "architecture":
+        target_component = {
+            "model": "model_adapter",
+            "context": "context_profile",
+            "tools": "tool_profile",
+        }.get(planned_layer, planned_layer)
+    return {
+        "evidence_events": selected.evidence,
+        "failure_mechanism": selected.problem,
+        "selected_layer": planned_layer,
+        "target_component": target_component,
+        "planned_intervention": entry.plan.get("intervention"),
+        "executed_change": executed,
+        "alignment": {
+            "status": alignment,
+            "scope": "layer_only",
+            "executed_layer": executed_layer,
+        },
+        "observed_effect": {
+            "decision": entry.decision,
+            "outcome_type": entry.outcome_type,
+            "score_delta": entry.outcome.score_delta,
+            "expected_outcomes": entry.outcome_observations,
+        },
+    }
+
+
+def _causal_trace_context(trace: dict[str, Any]) -> dict[str, Any]:
+    if not trace:
+        return {}
+    executed = trace.get("executed_change")
+    if isinstance(executed, dict):
+        executed = dict(executed)
+        if "patch_excerpt" in executed:
+            executed["patch_excerpt"] = str(executed["patch_excerpt"])[
+                :PATCH_CONTEXT_CHARS
+            ]
+    observed = trace.get("observed_effect")
+    if isinstance(observed, dict):
+        observed = {
+            key: observed.get(key)
+            for key in ("decision", "outcome_type", "score_delta")
+        }
+    return {
+        "evidence_events": [
+            str(item)[:TEXT_CONTEXT_CHARS]
+            for item in trace.get("evidence_events", [])[:4]
+        ],
+        "failure_mechanism": str(trace.get("failure_mechanism", ""))[
+            :TEXT_CONTEXT_CHARS
+        ],
+        "selected_layer": trace.get("selected_layer"),
+        "target_component": trace.get("target_component"),
+        "planned_intervention": str(trace.get("planned_intervention", ""))[
+            :TEXT_CONTEXT_CHARS
+        ],
+        "executed_change": executed,
+        "alignment": trace.get("alignment", {}),
+        "observed_effect": observed,
+    }
 
 
 def _limited_strings(value: Any) -> list[str]:

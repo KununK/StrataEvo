@@ -93,6 +93,7 @@ class GenerationRecord:
     agent_steps: int
     input_tokens: int
     output_tokens: int
+    causal_trace: dict[str, Any] = field(default_factory=dict)
     evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
     model_candidate: dict[str, Any] | None = None
     context_candidate: dict[str, Any] | None = None

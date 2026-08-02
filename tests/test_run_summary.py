@@ -43,6 +43,15 @@ class RunSummaryTests(unittest.TestCase):
             agent_output="done",
             parent_task_score=0.5,
             candidate_task_score=None,
+            causal_trace={
+                "failure_mechanism": "artifact deleted after validation",
+                "target_component": ["src/tinyagent/agent.py"],
+                "executed_change": {
+                    "type": "source_patch",
+                    "changed_paths": ["src/tinyagent/agent.py"],
+                },
+                "alignment": {"status": "layer_aligned", "scope": "layer_only"},
+            },
             evaluation_attempts=[{"outcome_type": "semantic_noop"}],
             outcome=MemoryOutcome(
                 "not_evaluated",
@@ -76,12 +85,18 @@ class RunSummaryTests(unittest.TestCase):
             self.assertEqual(summary["outcomes"], {"semantic_noop": 1})
             self.assertEqual(summary["generations"][0]["semantic_noop_attempts"], 1)
             self.assertEqual(summary["generations"][0]["intervention"], "test intervention")
+            self.assertEqual(summary["causal_alignments"], {"layer_aligned": 1})
+            self.assertEqual(
+                summary["generations"][0]["causal_trace"]["failure_mechanism"],
+                "artifact deleted after validation",
+            )
             self.assertEqual(
                 summary["generations"][0]["intervention_verdict"],
                 "untested",
             )
             self.assertIn("test hypothesis", (run_dir / "summary.md").read_text())
             self.assertIn("test intervention", (run_dir / "summary.md").read_text())
+            self.assertIn("artifact deleted after validation", (run_dir / "summary.md").read_text())
 
 
 if __name__ == "__main__":

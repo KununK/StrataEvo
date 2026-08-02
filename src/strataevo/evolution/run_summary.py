@@ -22,6 +22,7 @@ def write_run_summary(
     )
     outcomes = Counter(item["outcome_type"] for item in generations)
     decisions = Counter(item["decision"] for item in generations)
+    alignments = Counter(item["causal_alignment"] for item in generations)
     summary = {
         "run_name": run_dir.name,
         "generation_count": len(generations),
@@ -34,6 +35,7 @@ def write_run_summary(
         "planned_layers": dict(sorted(planned_layers.items())),
         "outcomes": dict(sorted(outcomes.items())),
         "decisions": dict(sorted(decisions.items())),
+        "causal_alignments": dict(sorted(alignments.items())),
         "generations": generations,
     }
     write_json(run_dir / "summary.json", summary)
@@ -44,6 +46,8 @@ def _generation_summary(entry: EvolutionMemoryEntry) -> dict[str, Any]:
     semantic_noops = sum(
         attempt.get("outcome_type") == "semantic_noop" for attempt in entry.evaluation_attempts
     )
+    trace = entry.causal_trace
+    alignment = trace.get("alignment", {})
     return {
         "generation": entry.generation,
         "diagnosed_layers": list(
@@ -63,6 +67,8 @@ def _generation_summary(entry: EvolutionMemoryEntry) -> dict[str, Any]:
         "changed_paths": entry.changed_paths,
         "semantic_noop_attempts": semantic_noops,
         "reason": entry.reason,
+        "causal_trace": trace,
+        "causal_alignment": alignment.get("status", "unavailable"),
     }
 
 
@@ -77,6 +83,7 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Diagnosed layers: `{summary['diagnosed_layers']}`",
         f"- Planned layers: `{summary['planned_layers']}`",
         f"- Decisions: `{summary['decisions']}`",
+        f"- Causal alignments: `{summary['causal_alignments']}`",
         "",
         "| Generation | Layer | Hypothesis | Intervention | Decision | Outcome | "
         "H verdict | I verdict | Parent | Candidate |",
@@ -88,6 +95,25 @@ def _write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{_cell(item['intervention'])} | {item['decision']} | {item['outcome_type']} | "
             f"{item['hypothesis_verdict']} | {item['intervention_verdict']} | "
             f"{_score(item['parent_task_score'])} | {_score(item['candidate_task_score'])} |"
+        )
+    rows.extend(
+        [
+            "",
+            "## Causal Trace",
+            "",
+            "Alignment is observational and checks the selected layer only.",
+            "",
+            "| Generation | Failure mechanism | Target | Executed change | Alignment |",
+            "| ---: | --- | --- | --- | --- |",
+        ]
+    )
+    for item in summary["generations"]:
+        trace = item["causal_trace"]
+        rows.append(
+            f"| {item['generation']} | {_cell(trace.get('failure_mechanism'))} | "
+            f"{_cell(trace.get('target_component'))} | "
+            f"{_cell(_executed_summary(trace.get('executed_change')))} | "
+            f"{item['causal_alignment']} |"
         )
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -110,3 +136,14 @@ def _cell(value: Any) -> str:
 
 def _score(value: Any) -> str:
     return "-" if value is None else f"{float(value):.6f}"
+
+
+def _executed_summary(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    change_type = str(value.get("type", "none"))
+    if change_type == "source_patch":
+        return f"source_patch: {', '.join(value.get('changed_paths', []))}"
+    if change_type == "tool_profile":
+        return f"tool_profile: {', '.join(value.get('description_addenda', {}))}"
+    return change_type

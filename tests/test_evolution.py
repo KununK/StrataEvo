@@ -576,6 +576,11 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(record["outcome_type"], "accepted")
             self.assertEqual(record["diagnosed_layers"], ["architecture"])
             self.assertEqual(record["planned_layer"], "architecture")
+            trace = record["causal_trace"]
+            self.assertEqual(trace["evidence_events"], ["test evidence"])
+            self.assertEqual(trace["failure_mechanism"], "test problem")
+            self.assertEqual(trace["executed_change"]["type"], "source_patch")
+            self.assertEqual(trace["alignment"]["status"], "layer_aligned")
             memory = self._read_jsonl(run_dir / "evolution_memory.jsonl")
             self.assertEqual(len(memory), 1)
             self.assertEqual(memory[0]["generation"], 1)
@@ -584,6 +589,7 @@ class EvolutionTests(unittest.TestCase):
             self.assertTrue(memory[0]["patch_path"].endswith("changes.patch"))
             self.assertIn("VERSION = 1", memory[0]["patch_excerpt"])
             self.assertTrue(memory[0]["outcome_observations"][0]["satisfied"])
+            self.assertEqual(memory[0]["causal_trace"], trace)
             self.assertEqual(memory[0]["outcome"]["status"], "supported")
             self.assertAlmostEqual(memory[0]["outcome"]["score_delta"], 0.1)
             self.assertEqual(agent_file.read_text(encoding="utf-8"), "VERSION = 1\n")
@@ -875,6 +881,14 @@ class EvolutionTests(unittest.TestCase):
             self.assertEqual(record["context_candidate"], context_candidate)
             self.assertEqual(record["agent_stop_reason"], "context_evolution")
             self.assertEqual(record["input_tokens"], 12)
+            self.assertEqual(
+                record["causal_trace"]["executed_change"]["type"],
+                "context_profile",
+            )
+            self.assertEqual(
+                record["causal_trace"]["alignment"]["status"],
+                "layer_aligned",
+            )
             self.assertEqual(self._git_output(root, "rev-parse", "HEAD").strip(), parent_commit)
 
     @staticmethod

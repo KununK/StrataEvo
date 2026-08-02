@@ -656,10 +656,10 @@ def _finish_generation(
     plan_report: EvolutionPlanReport,
     agent_output: str,
 ) -> None:
+    entry = EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_output)
+    record.causal_trace = entry.causal_trace
     write_json(generation_dir / "record.json", record.to_dict())
-    memory.append(
-        EvolutionMemoryEntry.from_generation(record, diagnosis, plan_report, agent_output)
-    )
+    memory.append(entry)
     state["next_generation"] = record.generation + 1
     write_json(state_path, state)
     write_run_summary(state_path.parent, memory.load(), state)

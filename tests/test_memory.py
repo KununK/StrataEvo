@@ -2,12 +2,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from strataevo.evolution.memory import (
     EvolutionMemory,
     EvolutionMemoryEntry,
     MemoryDiagnosis,
     MemoryOutcome,
+    _causal_trace,
     _summarize_outcome,
     _task_transitions,
     memory_context,
@@ -99,6 +101,39 @@ class EvolutionMemoryTests(unittest.TestCase):
         self.assertEqual(context["outcome"]["remaining_failures"]["count"], 20)
         self.assertEqual(len(context["outcome"]["remaining_failures"]["examples"]), 12)
         self.assertNotIn("agent_output", context)
+        self.assertEqual(context["causal_trace"], {})
+
+    def test_legacy_entry_defaults_to_empty_causal_trace(self):
+        data = self._entry(1, "context", "rejected").to_dict()
+        data.pop("causal_trace")
+
+        loaded = EvolutionMemoryEntry.from_dict(data)
+
+        self.assertEqual(loaded.causal_trace, {})
+
+    def test_causal_trace_maps_all_candidate_types_to_layers(self):
+        diagnosis = SimpleNamespace(
+            diagnoses=[SimpleNamespace(evidence=["event"], problem="mechanism")]
+        )
+        candidates = {
+            "architecture": {},
+            "context": {"context_candidate": {"system_prompt_addendum": "guide"}},
+            "tools": {"tool_candidate": {"description_addenda": {"read_file": "guide"}}},
+            "model": {"model_candidate": {"executed_intervention": {}}},
+        }
+
+        for layer, values in candidates.items():
+            with self.subTest(layer=layer):
+                entry = self._entry(1, layer, "rejected")
+                if layer != "architecture":
+                    entry.changed_paths = []
+                for name, value in values.items():
+                    setattr(entry, name, value)
+
+                trace = _causal_trace(entry, diagnosis)
+
+                self.assertEqual(trace["selected_layer"], layer)
+                self.assertEqual(trace["alignment"]["status"], "layer_aligned")
 
     def test_rejected_benchmark_records_explicit_counterevidence(self):
         entry = self._entry(1, "architecture", "rejected")
