@@ -372,7 +372,11 @@ def run_one_generation(config_path: Path) -> int:
         candidate_report = selection_report
         if eligible:
             promotion_parent_report, candidate_report = candidate_session.confirm(best_attempt)
-            accepted, reason = _promotion_decision(promotion_parent_report, candidate_report)
+            accepted, reason = _confirmed_promotion_decision(
+                parent_report,
+                promotion_parent_report,
+                candidate_report,
+            )
             reason = f"fresh promotion comparison: {reason}"
         else:
             accepted = False
@@ -563,6 +567,19 @@ def _promotion_decision(
             f"pass@1 {candidate.task_score:.6f} did not exceed parent {parent.task_score:.6f}"
         )
     return True, "pass@1 strictly improved"
+
+
+def _confirmed_promotion_decision(
+    stored_parent: EvaluationReport,
+    fresh_parent: EvaluationReport,
+    candidate: EvaluationReport,
+) -> tuple[bool, str]:
+    if candidate.task_score <= max(stored_parent.task_score, fresh_parent.task_score):
+        return False, (
+            f"pass@1 {candidate.task_score:.6f} must exceed stored parent "
+            f"{stored_parent.task_score:.6f} and fresh parent {fresh_parent.task_score:.6f}"
+        )
+    return True, "pass@1 strictly improved over stored and fresh parent"
 
 
 def _record(

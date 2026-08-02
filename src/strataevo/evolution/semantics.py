@@ -57,4 +57,12 @@ def _classify_file(path: str, parent: str | None, candidate_path: Path) -> str:
 
 
 def _python_tree(source: str) -> str:
-    return ast.dump(ast.parse(source), include_attributes=False)
+    tree = ast.parse(source)
+    if (
+        tree.body
+        and isinstance(tree.body[0], ast.Expr)
+        and isinstance(tree.body[0].value, ast.Constant)
+        and isinstance(tree.body[0].value.value, str)
+    ):
+        del tree.body[0]
+    return ast.dump(tree, include_attributes=False)

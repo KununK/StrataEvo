@@ -151,7 +151,8 @@ round。每轮 step 上限根据剩余总预算和剩余 round 数动态均分�
 时初始上限为每轮 40；如果某轮提前结束，未使用的预算会滚入后续轮次。每轮结束后控制器
 自动检查当前 diff，并把验证或 benchmark 结果追加到同一个 session 后再启动下一轮；模型
 主动调用 `evaluate_candidate` 时，未变化的 patch 会直接复用缓存，不重复消耗评测。Python
-注释/格式变化以及结构等价的 JSON/TOML 会被保守识别为 `semantic_noop`，恢复父代或已有
+注释/模块 docstring/格式变化以及结构等价的 JSON/TOML 会被保守识别为
+`semantic_noop`，恢复父代或已有
 最佳候选，且不运行固定验证、不消耗 benchmark 配额。无法证明等价的修改仍按正常候选评测。
 每条候选反馈都会返回 `candidate_retained` 和 `working_tree_state`。前者说明刚提交的 patch
 是否仍然生效，后者明确当前工作树是 `current_candidate`、`best_candidate` 还是 `parent`。

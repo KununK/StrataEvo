@@ -180,10 +180,12 @@ round 和 5 次候选 benchmark 配额。
 
 Evaluation Contract 声明当前 benchmark 能直接观察哪些代码。当前 HumanEval 和 MBPP 都
 直接评测 `src/tinyagent/`；只影响以后自修改行为的代码不能借用本轮任务分数晋级。探索阶段
-只负责选择候选，随后会重新评测父代与候选。新鲜候选的 pass@1 严格更高才会提交，否则恢复
-父代。步数、Token 和时间继续记录为研究指标，但不混入晋级分数。每代结束会自动更新运行
+只负责选择候选，随后会重新评测父代与候选。确认候选必须同时超过进入本代时记录的父代和
+新鲜父代才会提交，否则恢复父代。步数、Token 和时间继续记录为研究指标，但不混入晋级
+分数。每代结束会自动更新运行
 目录下的 `summary.json` 和 `summary.md`；被评测反证的假设及 counterevidence 会进入下一代
-Planner。可证明只有注释、格式或结构变化的源码候选会作为 `semantic_noop` 提前恢复。
+Planner。可证明只有注释、模块 docstring、格式或结构变化的源码候选会作为
+`semantic_noop` 提前恢复；可能影响工具描述的函数 docstring 仍按行为变化处理。
 
 ```bash
 strataevo \

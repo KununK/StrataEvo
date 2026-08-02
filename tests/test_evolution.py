@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from strataevo.evolution.attempts import CandidateEvaluationSession
 from strataevo.evolution.cli import (
+    _confirmed_promotion_decision,
     _prepare_generation_dir,
     _promotion_decision,
     _validate_args,
@@ -342,6 +343,15 @@ class EvolutionTests(unittest.TestCase):
         self.assertFalse(_promotion_decision(parent, worse_score)[0])
         self.assertFalse(_promotion_decision(parent, equal_score)[0])
 
+    def test_confirmed_promotion_must_exceed_stored_and_fresh_parent(self):
+        stored = EvaluationReport(0.9, {}, "stored", "stored.log")
+        fresh = EvaluationReport(0.7, {}, "fresh", "fresh.log")
+        below_stored = EvaluationReport(0.8, {}, "candidate", "candidate.log")
+        above_both = EvaluationReport(0.95, {}, "candidate", "candidate.log")
+
+        self.assertFalse(_confirmed_promotion_decision(stored, fresh, below_stored)[0])
+        self.assertTrue(_confirmed_promotion_decision(stored, fresh, above_both)[0])
+
     def test_incomplete_generation_is_archived_before_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             generation = Path(directory) / "generation-0001"
@@ -659,6 +669,7 @@ class EvolutionTests(unittest.TestCase):
             )
             self.assertEqual(record["candidate_report"]["task_score"], 0.65)
             self.assertEqual(record["promotion_parent_report"]["task_score"], 0.5)
+            self.assertIn("stored and fresh parent", record["reason"])
             self.assertEqual(len(record["evaluation_attempts"]), 2)
             self.assertEqual(
                 [item["report"]["task_score"] for item in record["evaluation_attempts"]],
