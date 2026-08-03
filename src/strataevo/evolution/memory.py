@@ -7,8 +7,28 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .evaluation import promotion_observation
+from .core import causal, outcomes
+from .runtime.evaluation import promotion_observation
 from .types import EvaluationReport, GenerationRecord
+
+MemoryOutcome = outcomes.MemoryOutcome
+_causal_trace = causal.causal_trace
+_causal_trace_context = causal.causal_trace_context
+_executed_intervention = causal.executed_intervention
+_summarize_generation = outcomes.summarize_generation
+_summarize_outcome = outcomes.summarize_outcome
+_task_transitions = outcomes.task_transitions
+
+__all__ = [
+    "EvolutionMemory",
+    "EvolutionMemoryEntry",
+    "MemoryDiagnosis",
+    "MemoryOutcome",
+    "_causal_trace",
+    "_summarize_outcome",
+    "_task_transitions",
+    "memory_context",
+]
 
 if TYPE_CHECKING:
     from .diagnosis import DiagnosisReport
@@ -17,22 +37,8 @@ if TYPE_CHECKING:
 
 DEFAULT_MEMORY_CONTEXT_ENTRIES = 8
 PATCH_EXCERPT_CHARS = 3000
-PATCH_CONTEXT_CHARS = 1200
-TASK_CONTEXT_LIMIT = 12
 TEXT_CONTEXT_CHARS = 500
 EVOLUTION_LAYERS = {"model", "context", "tools", "architecture"}
-OUTCOME_STATUSES = {"supported", "regressed", "no_measured_gain", "not_evaluated"}
-HYPOTHESIS_VERDICTS = {"supported", "refuted", "untested"}
-INTERVENTION_VERDICTS = {"effective", "ineffective", "failed", "untested"}
-FAILED_INTERVENTION_OUTCOMES = {
-    "deferred_change",
-    "mixed_change_scope",
-    "model_training_skipped",
-    "no_change",
-    "semantic_noop",
-    "unclassified_change",
-    "validation_failed",
-}
 
 
 @dataclass(slots=True)
@@ -60,95 +66,6 @@ class MemoryDiagnosis:
         if not 0.0 <= diagnosis.confidence <= 1.0:
             raise ValueError("memory diagnosis confidence must be between 0 and 1")
         return diagnosis
-
-
-@dataclass(slots=True)
-class MemoryOutcome:
-    status: str
-    score_delta: float | None
-    fixed_tasks: list[str]
-    regressed_tasks: list[str]
-    remaining_failures: list[str]
-    summary: str
-    next_step: str
-    hypothesis_verdict: str = "untested"
-    counterevidence: list[str] = field(default_factory=list)
-    intervention_verdict: str = "untested"
-    intervention_evidence: list[str] = field(default_factory=list)
-
-    @classmethod
-    def from_dict(
-        cls,
-        data: dict[str, Any],
-        outcome_type: str = "",
-    ) -> MemoryOutcome:
-        status = str(data["status"])
-        verdict = str(data.get("hypothesis_verdict", _legacy_verdict(status)))
-        raw_counterevidence = data.get("counterevidence")
-        if raw_counterevidence is None:
-            raw_counterevidence = [str(data["summary"])] if verdict == "refuted" else []
-        intervention_verdict = str(
-            data.get(
-                "intervention_verdict",
-                _legacy_intervention_verdict(status, outcome_type),
-            )
-        )
-        intervention_evidence = data.get("intervention_evidence")
-        if intervention_evidence is None:
-            intervention_evidence = (
-                [str(data["summary"])]
-                if intervention_verdict in {"ineffective", "failed"}
-                else []
-            )
-        outcome = cls(
-            status=status,
-            score_delta=(
-                float(data["score_delta"]) if data.get("score_delta") is not None else None
-            ),
-            fixed_tasks=_string_list(data.get("fixed_tasks", []), "fixed_tasks"),
-            regressed_tasks=_string_list(data.get("regressed_tasks", []), "regressed_tasks"),
-            remaining_failures=_string_list(
-                data.get("remaining_failures", []), "remaining_failures"
-            ),
-            summary=str(data["summary"]),
-            next_step=str(data["next_step"]),
-            hypothesis_verdict=verdict,
-            counterevidence=_string_list(raw_counterevidence, "counterevidence"),
-            intervention_verdict=intervention_verdict,
-            intervention_evidence=_string_list(
-                intervention_evidence, "intervention_evidence"
-            ),
-        )
-        if outcome.status not in OUTCOME_STATUSES:
-            raise ValueError(f"invalid memory outcome status: {outcome.status}")
-        if outcome.hypothesis_verdict not in HYPOTHESIS_VERDICTS:
-            raise ValueError(
-                f"invalid memory hypothesis verdict: {outcome.hypothesis_verdict}"
-            )
-        if outcome.intervention_verdict not in INTERVENTION_VERDICTS:
-            raise ValueError(
-                f"invalid memory intervention verdict: {outcome.intervention_verdict}"
-            )
-        return outcome
-
-    def to_context_dict(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "score_delta": self.score_delta,
-            "fixed_tasks": _task_context(self.fixed_tasks),
-            "regressed_tasks": _task_context(self.regressed_tasks),
-            "remaining_failures": _task_context(self.remaining_failures),
-            "summary": self.summary[:TEXT_CONTEXT_CHARS],
-            "next_step": self.next_step[:TEXT_CONTEXT_CHARS],
-            "hypothesis_verdict": self.hypothesis_verdict,
-            "counterevidence": [
-                item[:TEXT_CONTEXT_CHARS] for item in self.counterevidence[:4]
-            ],
-            "intervention_verdict": self.intervention_verdict,
-            "intervention_evidence": [
-                item[:TEXT_CONTEXT_CHARS] for item in self.intervention_evidence[:4]
-            ],
-        }
 
 
 @dataclass(slots=True)
@@ -436,291 +353,6 @@ def _attempt_context(attempt: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _executed_intervention(entry: EvolutionMemoryEntry) -> dict[str, Any]:
-    if entry.model_candidate:
-        executed = entry.model_candidate.get("executed_intervention")
-        if isinstance(executed, dict):
-            training = executed.get("training")
-            return {
-                "type": "model_adapter",
-                "targeted_tasks": _limited_strings(executed.get("targeted_tasks")),
-                "repaired_tasks": _limited_strings(executed.get("repaired_tasks")),
-                "repair_attempts": executed.get("repair_attempts", 0),
-                "repair_guidance": str(executed.get("repair_guidance", ""))[
-                    :TEXT_CONTEXT_CHARS
-                ],
-                "training": (
-                    {
-                        key: training.get(key)
-                        for key in ("epochs", "max_length", "lora_rank", "learning_rate")
-                    }
-                    if isinstance(training, dict)
-                    else None
-                ),
-            }
-        return {"type": "model_adapter"}
-    if entry.context_candidate:
-        return {
-            "type": "context_profile",
-            "system_prompt_addendum": str(
-                entry.context_candidate.get("system_prompt_addendum", "")
-            )[:TEXT_CONTEXT_CHARS],
-            "task_prompt_addendum": str(
-                entry.context_candidate.get("task_prompt_addendum", "")
-            )[:TEXT_CONTEXT_CHARS],
-        }
-    if entry.tool_candidate:
-        addenda = entry.tool_candidate.get("description_addenda")
-        return {
-            "type": "tool_profile",
-            "description_addenda": (
-                {
-                    str(name): str(text)[:TEXT_CONTEXT_CHARS]
-                    for name, text in list(addenda.items())[:8]
-                }
-                if isinstance(addenda, dict)
-                else {}
-            ),
-        }
-    if entry.changed_paths:
-        return {
-            "type": "source_patch",
-            "changed_paths": entry.changed_paths,
-            "patch_excerpt": entry.patch_excerpt[:PATCH_CONTEXT_CHARS],
-        }
-    return {"type": "none"}
-
-
-def _causal_trace(
-    entry: EvolutionMemoryEntry,
-    diagnosis: DiagnosisReport,
-    promotion: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    target = int(entry.plan.get("target_diagnosis", 0))
-    selected = diagnosis.diagnoses[target]
-    executed = _executed_intervention(entry)
-    planned_layer = str(entry.plan.get("primary_layer", ""))
-    executed_layer = {
-        "model_adapter": "model",
-        "context_profile": "context",
-        "tool_profile": "tools",
-        "source_patch": "architecture",
-    }.get(str(executed.get("type")))
-    alignment = (
-        "not_executed"
-        if executed_layer is None
-        else "layer_aligned"
-        if executed_layer == planned_layer
-        else "layer_mismatch"
-    )
-    target_component: Any = entry.plan.get("likely_files", [])
-    if planned_layer != "architecture":
-        target_component = {
-            "model": "model_adapter",
-            "context": "context_profile",
-            "tools": "tool_profile",
-        }.get(planned_layer, planned_layer)
-    return {
-        "evidence_events": selected.evidence,
-        "failure_mechanism": selected.problem,
-        "selected_layer": planned_layer,
-        "target_component": target_component,
-        "planned_intervention": entry.plan.get("intervention"),
-        "executed_change": executed,
-        "alignment": {
-            "status": alignment,
-            "scope": "layer_only",
-            "executed_layer": executed_layer,
-        },
-        "observed_effect": {
-            "decision": entry.decision,
-            "outcome_type": entry.outcome_type,
-            "score_delta": entry.outcome.score_delta,
-            "promotion": promotion,
-            "expected_outcomes": entry.outcome_observations,
-        },
-    }
-
-
-def _causal_trace_context(trace: dict[str, Any]) -> dict[str, Any]:
-    if not trace:
-        return {}
-    executed = trace.get("executed_change")
-    if isinstance(executed, dict):
-        executed = dict(executed)
-        if "patch_excerpt" in executed:
-            executed["patch_excerpt"] = str(executed["patch_excerpt"])[
-                :PATCH_CONTEXT_CHARS
-            ]
-    observed = trace.get("observed_effect")
-    if isinstance(observed, dict):
-        observed = {
-            key: observed.get(key)
-            for key in ("decision", "outcome_type", "score_delta", "promotion")
-        }
-    return {
-        "evidence_events": [
-            str(item)[:TEXT_CONTEXT_CHARS]
-            for item in trace.get("evidence_events", [])[:4]
-        ],
-        "failure_mechanism": str(trace.get("failure_mechanism", ""))[
-            :TEXT_CONTEXT_CHARS
-        ],
-        "selected_layer": trace.get("selected_layer"),
-        "target_component": trace.get("target_component"),
-        "planned_intervention": str(trace.get("planned_intervention", ""))[
-            :TEXT_CONTEXT_CHARS
-        ],
-        "executed_change": executed,
-        "alignment": trace.get("alignment", {}),
-        "observed_effect": observed,
-    }
-
-
-def _limited_strings(value: Any) -> list[str]:
-    return [str(item) for item in value[:TASK_CONTEXT_LIMIT]] if isinstance(value, list) else []
-
-
-def _summarize_generation(
-    record: GenerationRecord,
-    parent: dict[str, Any],
-    candidate: dict[str, Any] | None,
-) -> MemoryOutcome:
-    values = {
-        "decision": record.decision,
-        "outcome_type": record.outcome_type,
-        "reason": record.reason,
-        "parent_task_score": parent.get("task_score"),
-        "candidate_task_score": candidate.get("task_score") if candidate else None,
-    }
-    outcome = _summarize_outcome(values)
-    if candidate:
-        transitions = _task_transitions(parent, candidate)
-        outcome.fixed_tasks = transitions["fixed_tasks"]
-        outcome.regressed_tasks = transitions["regressed_tasks"]
-        outcome.remaining_failures = transitions["remaining_failures"]
-        if outcome.intervention_verdict == "ineffective":
-            if outcome.regressed_tasks:
-                outcome.intervention_evidence.append(
-                    f"Regressed {len(outcome.regressed_tasks)} previously passing tasks."
-                )
-            if not outcome.fixed_tasks:
-                outcome.intervention_evidence.append(
-                    "No failing task was fixed in the comparison."
-                )
-    return outcome
-
-
-def _summarize_outcome(values: dict[str, Any]) -> MemoryOutcome:
-    parent_score = _optional_float(values.get("parent_task_score"))
-    candidate_score = _optional_float(values.get("candidate_task_score"))
-    delta = (
-        candidate_score - parent_score
-        if parent_score is not None and candidate_score is not None
-        else None
-    )
-    outcome_type = str(values.get("outcome_type", ""))
-    decision = str(values.get("decision", ""))
-    reason = str(values.get("reason", "")).strip()
-    if decision == "accepted":
-        status = "supported"
-        verdict = "supported"
-        counterevidence = []
-        intervention_verdict = "effective"
-        intervention_evidence = [
-            f"Accepted with candidate task-score delta {_format_delta(delta)}."
-        ]
-        summary = f"The intervention was accepted with task-score delta {_format_delta(delta)}."
-        next_step = "Retain this change and build on the evidence that it improved the benchmark."
-    elif outcome_type == "benchmark_rejected" and delta is not None and delta < 0:
-        status = "regressed"
-        verdict = "untested"
-        counterevidence = []
-        intervention_verdict = "ineffective"
-        intervention_evidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
-        summary = f"The evaluated intervention regressed by {_format_delta(delta)}."
-        next_step = "Keep the hypothesis open, but do not repeat this intervention unchanged."
-    elif outcome_type == "benchmark_rejected" and delta is not None:
-        status = "no_measured_gain"
-        verdict = "untested"
-        counterevidence = []
-        intervention_verdict = "ineffective"
-        intervention_evidence = [f"Candidate task-score delta was {_format_delta(delta)}."]
-        summary = (
-            f"The evaluated intervention produced no promotable gain ({_format_delta(delta)})."
-        )
-        next_step = (
-            "Retry this direction only with new evidence or a materially different intervention."
-        )
-    elif outcome_type in FAILED_INTERVENTION_OUTCOMES:
-        status = "not_evaluated"
-        verdict = "untested"
-        counterevidence = []
-        intervention_verdict = "failed"
-        intervention_evidence = [reason or outcome_type]
-        summary = f"The hypothesis was not tested successfully: {reason or outcome_type}."
-        next_step = (
-            "Keep the causal hypothesis open, but do not repeat this failed intervention."
-        )
-    else:
-        status = "not_evaluated"
-        verdict = "untested"
-        counterevidence = []
-        intervention_verdict = "untested"
-        intervention_evidence = []
-        summary = f"The hypothesis was not tested successfully: {reason or outcome_type}."
-        next_step = "Resolve the evaluation failure before drawing a causal conclusion."
-    return MemoryOutcome(
-        status=status,
-        score_delta=delta,
-        fixed_tasks=[],
-        regressed_tasks=[],
-        remaining_failures=[],
-        summary=summary,
-        next_step=next_step,
-        hypothesis_verdict=verdict,
-        counterevidence=counterevidence,
-        intervention_verdict=intervention_verdict,
-        intervention_evidence=intervention_evidence,
-    )
-
-
-def _task_transitions(
-    parent_report: dict[str, Any],
-    candidate_report: dict[str, Any],
-) -> dict[str, list[str]]:
-    parent = _task_results(parent_report)
-    candidate = _task_results(candidate_report)
-    shared = sorted(parent.keys() & candidate.keys())
-    return {
-        "fixed_tasks": [task for task in shared if not parent[task] and candidate[task]],
-        "regressed_tasks": [task for task in shared if parent[task] and not candidate[task]],
-        "remaining_failures": [task for task in shared if not candidate[task]],
-    }
-
-
-def _task_results(report: dict[str, Any]) -> dict[str, bool]:
-    output_dir = report.get("output_dir")
-    if not isinstance(output_dir, str):
-        return {}
-    path = Path(output_dir) / "results.jsonl"
-    if not path.is_file():
-        return {}
-    results: dict[str, bool] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            return {}
-        task_id = item.get("task_id")
-        if not isinstance(task_id, (str, int)):
-            return {}
-        results[str(task_id)] = bool(item.get("passed", item.get("status") == "pass"))
-    return results
-
-
 def _selected_diagnosis(
     diagnoses: list[MemoryDiagnosis],
     plan: dict[str, Any],
@@ -743,39 +375,9 @@ def _entry_layers(entry: EvolutionMemoryEntry) -> set[str]:
     return layers
 
 
-def _task_context(tasks: list[str]) -> dict[str, Any]:
-    return {"count": len(tasks), "examples": tasks[:TASK_CONTEXT_LIMIT]}
-
-
-def _optional_float(value: Any) -> float | None:
-    return float(value) if isinstance(value, (int, float)) else None
-
-
-def _format_delta(delta: float | None) -> str:
-    return "unknown" if delta is None else f"{delta:+.6f}"
-
-
 def _validate_limit(limit: int) -> None:
     if limit <= 0:
         raise ValueError("memory context limit must be positive")
-
-
-def _legacy_verdict(status: str) -> str:
-    if status == "supported":
-        return "supported"
-    if status in {"regressed", "no_measured_gain"}:
-        return "refuted"
-    return "untested"
-
-
-def _legacy_intervention_verdict(status: str, outcome_type: str) -> str:
-    if status == "supported":
-        return "effective"
-    if status in {"regressed", "no_measured_gain"}:
-        return "ineffective"
-    if outcome_type in FAILED_INTERVENTION_OUTCOMES:
-        return "failed"
-    return "untested"
 
 
 def _legacy_outcome_type(decision: Any, reason: Any) -> str:

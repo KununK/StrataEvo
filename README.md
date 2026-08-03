@@ -9,7 +9,16 @@ StrataEvo 是一个面向自进化 Agent 和下游任务评测的研究项目。
 ```text
 StrataEvo/
 ├── src/tinyagent/              # 通用 Agent 运行时
-├── src/strataevo/evolution/    # 诊断、计划、修改、评测和版本控制
+├── src/strataevo/evolution/    # 自进化控制平面
+│   ├── cli.py                  # 命令入口和代际进程监督
+│   ├── generation.py           # 单代事务编排
+│   ├── diagnosis.py            # Evidence 驱动的四层诊断
+│   ├── plan.py                 # 单目标干预计划
+│   ├── memory.py               # 跨代 Memory schema 与存储
+│   ├── layers/                 # Architecture、Context、Tools、Model 执行器
+│   ├── runtime/                # 评测、契约、Git、Workspace 和结构化调用
+│   ├── core/                   # Outcome 与 Causal Trace 领域逻辑
+│   └── utils/                  # JSON I/O 与语义比较等无状态工具
 ├── eval/                       # 共享 coding-agent harness 与 benchmark 适配器
 ├── tests/                      # 运行时、演化控制器和 benchmark 回归测试
 ├── evolution/runs/             # 实验记录，已被 Git 忽略

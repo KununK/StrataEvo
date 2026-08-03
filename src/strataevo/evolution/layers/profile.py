@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .evaluation import BenchmarkEvaluator, promotion_decision, promotion_observation
-from .io import read_jsonl, write_json
-from .types import EvaluationReport
+from ..runtime.evaluation import BenchmarkEvaluator, promotion_decision, promotion_observation
+from ..types import EvaluationReport
+from ..utils.io import read_jsonl, write_json
 
 ProfileGenerator = Callable[
     [list[dict[str, Any]]],

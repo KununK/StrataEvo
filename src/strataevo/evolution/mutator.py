@@ -16,12 +16,12 @@ from tinyagent import (
     allow_all,
 )
 
-from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport
 from .memory import EvolutionMemoryEntry, memory_context
 from .plan import EvolutionPlanReport
+from .runtime.contract import EvaluationContract
+from .runtime.workspace import SelfWorkspace
 from .types import EvaluationReport, EvolutionConfig
-from .workspace import SelfWorkspace
 
 SYSTEM_PROMPT = """You are StrataEvo, a self-improving software agent.
 Improve the task-solving Agent measured by the active evaluation contract. Inspect the repository

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from strataevo.evolution.semantics import classify_changes
+from strataevo.evolution.utils.semantics import classify_changes
 
 
 class ChangeSemanticsTests(unittest.TestCase):

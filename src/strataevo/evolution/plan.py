@@ -10,14 +10,14 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
-from .capabilities import executor_capabilities
-from .contract import EvaluationContract
 from .diagnosis import DiagnosisReport, EvolutionLayer
-from .evaluation import required_pass_gain
-from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
-from .structured import request_json
+from .runtime.capabilities import executor_capabilities
+from .runtime.contract import EvaluationContract
+from .runtime.evaluation import required_pass_gain
+from .runtime.structured import request_json
 from .types import DEFAULT_MUTABLE_PATHS, EvaluationReport, EvolutionConfig
+from .utils.io import write_json
 
 
 class MetricDirection(StrEnum):

@@ -9,14 +9,14 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
-from .contract import EvaluationContract
-from .diagnosis import DiagnosisReport
-from .evaluation import BenchmarkEvaluator
-from .memory import EvolutionMemoryEntry, memory_context
-from .plan import EvolutionPlanReport
-from .profile_evolution import ProfileEvolutionResult, evolve_profile
-from .structured import request_json
-from .types import EvaluationReport, EvolutionConfig
+from ..diagnosis import DiagnosisReport
+from ..memory import EvolutionMemoryEntry, memory_context
+from ..plan import EvolutionPlanReport
+from ..runtime.contract import EvaluationContract
+from ..runtime.evaluation import BenchmarkEvaluator
+from ..runtime.structured import request_json
+from ..types import EvaluationReport, EvolutionConfig
+from .profile import ProfileEvolutionResult, evolve_profile
 
 MAX_TOOL_PROFILE_CHARS = 8_000
 

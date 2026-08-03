@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..evidence import CodingAgentEvidenceCollector
+from ..types import EvaluationReport, EvolutionConfig
 from .contract import EvaluationContract
-from .evidence import CodingAgentEvidenceCollector
-from .types import EvaluationReport, EvolutionConfig
 
 
 class Evaluator(Protocol):

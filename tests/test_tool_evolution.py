@@ -4,15 +4,15 @@ import unittest
 from pathlib import Path
 
 from eval.coding_agent import load_tool_profile
-from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
+from strataevo.evolution.layers.tools import ToolEvolver, ToolProfile, evolve_tools
 from strataevo.evolution.plan import (
     EvolutionPlan,
     EvolutionPlanReport,
     ExpectedOutcome,
     MetricDirection,
 )
-from strataevo.evolution.tool_evolution import ToolEvolver, ToolProfile, evolve_tools
+from strataevo.evolution.runtime.contract import EvaluationContract
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 

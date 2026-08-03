@@ -12,12 +12,12 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
-from .capabilities import executor_capabilities
 from .evidence import EvidenceBundle, TaskEvidence, ToolEvent
-from .io import write_json
 from .memory import EvolutionMemoryEntry, memory_context
-from .structured import request_json
+from .runtime.capabilities import executor_capabilities
+from .runtime.structured import request_json
 from .types import EvaluationReport, EvolutionConfig
+from .utils.io import write_json
 
 DEFAULT_CONTEXT_LIMIT_CHARS = 60_000
 MEMORY_LIMIT_CHARS = 12_000

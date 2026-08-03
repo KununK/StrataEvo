@@ -6,12 +6,12 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .contract import ChangeImpact
-from .evaluation import Evaluator, promotion_observation, run_commands
-from .git import GitRepository
-from .io import write_json
-from .semantics import classify_changes
-from .types import EvaluationReport
+from ..runtime.contract import ChangeImpact
+from ..runtime.evaluation import Evaluator, promotion_observation, run_commands
+from ..runtime.repository import GitRepository
+from ..types import EvaluationReport
+from ..utils.io import write_json
+from ..utils.semantics import classify_changes
 
 
 @dataclass(slots=True)

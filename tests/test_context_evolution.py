@@ -4,19 +4,19 @@ import unittest
 from pathlib import Path
 
 from eval.coding_agent import SYSTEM_PROMPT, USER_PROMPT, load_context_prompts
-from strataevo.evolution.context_evolution import (
+from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
+from strataevo.evolution.layers.context import (
     ContextEvolver,
     ContextProfile,
     evolve_context,
 )
-from strataevo.evolution.contract import EvaluationContract
-from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
 from strataevo.evolution.plan import (
     EvolutionPlan,
     EvolutionPlanReport,
     ExpectedOutcome,
     MetricDirection,
 )
+from strataevo.evolution.runtime.contract import EvaluationContract
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 

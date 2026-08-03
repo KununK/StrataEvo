@@ -4,10 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from strataevo.evolution.attempts import CandidateEvaluationSession
-from strataevo.evolution.contract import EvaluationContract
-from strataevo.evolution.evaluation import promotion_decision
-from strataevo.evolution.git import GitRepository
+from strataevo.evolution.layers.architecture import CandidateEvaluationSession
+from strataevo.evolution.runtime.contract import EvaluationContract
+from strataevo.evolution.runtime.evaluation import promotion_decision
+from strataevo.evolution.runtime.repository import GitRepository
 from strataevo.evolution.types import EvaluationReport
 
 CONTRACT = EvaluationContract(

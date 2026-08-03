@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .io import read_json, read_jsonl, write_json
+from .utils.io import read_json, read_jsonl, write_json
 
 
 @dataclass(slots=True)

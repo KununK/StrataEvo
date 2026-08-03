@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from strataevo.evolution.evaluation import BenchmarkEvaluator, create_evaluator
+from strataevo.evolution.runtime.evaluation import BenchmarkEvaluator, create_evaluator
 from strataevo.evolution.types import EvolutionConfig
 
 

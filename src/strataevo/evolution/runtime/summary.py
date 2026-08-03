@@ -6,8 +6,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .io import write_json
-from .memory import EvolutionMemoryEntry
+from ..memory import EvolutionMemoryEntry
+from ..utils.io import write_json
 
 
 def write_run_summary(

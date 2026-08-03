@@ -2,10 +2,10 @@ import json
 import unittest
 from dataclasses import replace
 
-from strataevo.evolution.capabilities import executor_capabilities
 from strataevo.evolution.diagnosis import EvidenceDiagnoser, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from strataevo.evolution.memory import EvolutionMemoryEntry, MemoryDiagnosis
+from strataevo.evolution.runtime.capabilities import executor_capabilities
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 
 

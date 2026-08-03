@@ -14,9 +14,9 @@ from typing import Any
 
 from tinyagent import Model, OpenAICompatibleModel
 
-from .evaluation import BENCHMARKS
-from .io import read_jsonl, write_json, write_jsonl
-from .types import EvolutionConfig
+from ...runtime.evaluation import BENCHMARKS
+from ...types import EvolutionConfig
+from ...utils.io import read_jsonl, write_json, write_jsonl
 
 REPAIR_SYSTEM_PROMPT = """You are repairing a failed coding-agent attempt.
 Work only in the provided workspace. Read task.py, failure.txt, and previous_solution.py.

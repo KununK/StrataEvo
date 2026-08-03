@@ -8,7 +8,7 @@ from strataevo.evolution.memory import (
     MemoryDiagnosis,
     MemoryOutcome,
 )
-from strataevo.evolution.run_summary import write_run_summary
+from strataevo.evolution.runtime.summary import write_run_summary
 
 
 class RunSummaryTests(unittest.TestCase):

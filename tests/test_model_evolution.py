@@ -7,18 +7,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from strataevo.evolution.diagnosis import Diagnosis, EvolutionLayer
-from strataevo.evolution.model_evolution import (
+from strataevo.evolution.layers.model.evolution import (
     build_training_dataset,
     evolve_model,
     task_changes,
 )
-from strataevo.evolution.plan import EvolutionPlan, ExpectedOutcome, MetricDirection
-from strataevo.evolution.repair import (
+from strataevo.evolution.layers.model.repair import (
     RepairCollection,
     _benchmark_adapter,
     collect_failed_task_repairs,
 )
-from strataevo.evolution.sft import _chat_ids
+from strataevo.evolution.layers.model.sft import _chat_ids
+from strataevo.evolution.plan import EvolutionPlan, ExpectedOutcome, MetricDirection
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ScriptedModel, ToolCall
 
@@ -121,11 +121,11 @@ class ModelEvolutionTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "strataevo.evolution.model_evolution.collect_failed_task_repairs",
+                    "strataevo.evolution.layers.model.evolution.collect_failed_task_repairs",
                     return_value=repairs,
                 ),
                 patch(
-                    "strataevo.evolution.model_evolution.build_training_dataset",
+                    "strataevo.evolution.layers.model.evolution.build_training_dataset",
                     return_value={
                         "examples": 2,
                         "repair_examples": 1,
@@ -133,7 +133,7 @@ class ModelEvolutionTests(unittest.TestCase):
                         "trained_repair_tasks": ["failed"],
                     },
                 ),
-                patch("strataevo.evolution.model_evolution._run_training"),
+                patch("strataevo.evolution.layers.model.evolution._run_training"),
             ):
                 result = evolve_model(
                     config,
@@ -280,7 +280,7 @@ class ModelEvolutionTests(unittest.TestCase):
             )
 
             with patch(
-                "strataevo.evolution.repair._benchmark_adapter",
+                "strataevo.evolution.layers.model.repair._benchmark_adapter",
                 return_value=adapter,
             ):
                 collection = collect_failed_task_repairs(

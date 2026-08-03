@@ -35,11 +35,12 @@ src/strataevo/evolution/mutator.py
 ```text
 eval/                           评测基准和奖励信号
 tests/                          回归测试
-src/strataevo/evolution/cli.py  晋级控制器
+src/strataevo/evolution/cli.py  命令入口和代际进程监督
+src/strataevo/evolution/generation.py  单代编排和晋级控制器
 src/strataevo/evolution/diagnosis.py  四层诊断器
 src/strataevo/evolution/plan.py  单目标演化计划器
 src/strataevo/evolution/evidence.py  评测证据收集器
-src/strataevo/evolution/git.py  Git 提交和回滚
+src/strataevo/evolution/runtime/repository.py  Git 提交和回滚
 ```
 
 如果不保留这条边界，Agent 就可能通过修改评测器提高报告分数，而不是真正提升自身能力。

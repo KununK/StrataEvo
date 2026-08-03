@@ -11,13 +11,13 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Protocol
 
-from .diagnosis import Diagnosis
-from .evaluation import BenchmarkEvaluator
-from .io import read_jsonl
-from .plan import EvolutionPlan
-from .profile_evolution import ProfileEvolutionResult, evaluate_profile, task_changes
+from ...diagnosis import Diagnosis
+from ...plan import EvolutionPlan
+from ...runtime.evaluation import BenchmarkEvaluator
+from ...types import EvaluationReport, EvolutionConfig
+from ...utils.io import read_jsonl
+from ..profile import ProfileEvolutionResult, evaluate_profile, task_changes
 from .repair import RepairCollection, collect_failed_task_repairs
-from .types import EvaluationReport, EvolutionConfig
 
 
 class AdapterRuntime(Protocol):
@@ -324,7 +324,7 @@ def _run_training(config: EvolutionConfig, config_path: Path, log_path: Path) ->
     command = [
         sys.executable,
         "-m",
-        "strataevo.evolution.sft",
+        "strataevo.evolution.layers.model.sft",
         "--config",
         str(config_path),
     ]

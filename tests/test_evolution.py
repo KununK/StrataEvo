@@ -5,21 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from strataevo.evolution.attempts import CandidateEvaluationSession
 from strataevo.evolution.cli import (
     _prepare_generation_dir,
     _validate_args,
     parse_args,
     run_one_generation,
 )
-from strataevo.evolution.contract import EvaluationContract
 from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
-from strataevo.evolution.evaluation import (
-    promotion_decision,
-    promotion_observation,
-    required_pass_gain,
-)
-from strataevo.evolution.git import GitRepository
+from strataevo.evolution.layers.architecture import CandidateEvaluationSession
+from strataevo.evolution.layers.profile import ProfileEvolutionResult
 from strataevo.evolution.mutator import _round_step_budget, _run_refinement_session
 from strataevo.evolution.plan import (
     EvolutionPlan,
@@ -27,9 +21,15 @@ from strataevo.evolution.plan import (
     ExpectedOutcome,
     MetricDirection,
 )
-from strataevo.evolution.profile_evolution import ProfileEvolutionResult
+from strataevo.evolution.runtime.contract import EvaluationContract
+from strataevo.evolution.runtime.evaluation import (
+    promotion_decision,
+    promotion_observation,
+    required_pass_gain,
+)
+from strataevo.evolution.runtime.repository import GitRepository
+from strataevo.evolution.runtime.workspace import SelfWorkspace
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
-from strataevo.evolution.workspace import SelfWorkspace
 from tinyagent import AgentResult, Message, Usage
 
 TEST_CONTRACT = EvaluationContract(
@@ -218,7 +218,7 @@ class EvolutionTests(unittest.TestCase):
             (root / "attempts").mkdir()
             agent_file.write_text("VERSION = broken\n", encoding="utf-8")
             with patch(
-                "strataevo.evolution.attempts.run_commands",
+                "strataevo.evolution.layers.architecture.run_commands",
                 return_value=(False, "syntax error"),
             ):
                 feedback = json.loads(session.evaluate())
@@ -239,7 +239,7 @@ class EvolutionTests(unittest.TestCase):
 
             agent_file.write_text("VERSION = 1\n", encoding="utf-8")
             with patch(
-                "strataevo.evolution.attempts.run_commands",
+                "strataevo.evolution.layers.architecture.run_commands",
                 return_value=(True, "ok"),
             ):
                 feedback = json.loads(session.evaluate())
@@ -281,7 +281,7 @@ class EvolutionTests(unittest.TestCase):
             )
             agent_file.write_text("# comment\nVALUE=1\n", encoding="utf-8")
 
-            with patch("strataevo.evolution.attempts.run_commands") as validate:
+            with patch("strataevo.evolution.layers.architecture.run_commands") as validate:
                 feedback = json.loads(session.evaluate())
 
             validate.assert_not_called()
@@ -399,10 +399,10 @@ class EvolutionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "strataevo.evolution.cli.create_evaluator",
+                    "strataevo.evolution.generation.create_evaluator",
                     return_value=FullScoreEvaluator(root, config),
                 ),
-                patch("strataevo.evolution.cli.diagnose_evaluation") as diagnose,
+                patch("strataevo.evolution.generation.diagnose_evaluation") as diagnose,
             ):
                 self.assertEqual(run_one_generation(config_path), 0)
 
@@ -454,13 +454,16 @@ class EvolutionTests(unittest.TestCase):
                 raise KeyboardInterrupt
 
             with (
-                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch("strataevo.evolution.generation.validation_commands", return_value=[]),
                 patch(
-                    "strataevo.evolution.cli.diagnose_evaluation",
+                    "strataevo.evolution.generation.diagnose_evaluation",
                     return_value=self._diagnosis_report(),
                 ),
-                patch("strataevo.evolution.cli.plan_evolution", return_value=self._plan_report()),
-                patch("strataevo.evolution.cli.mutate", side_effect=interrupted_mutation),
+                patch(
+                    "strataevo.evolution.generation.plan_evolution",
+                    return_value=self._plan_report(),
+                ),
+                patch("strataevo.evolution.generation.mutate", side_effect=interrupted_mutation),
             ):
                 with self.assertRaises(KeyboardInterrupt):
                     run_one_generation(config_path)
@@ -558,13 +561,13 @@ class EvolutionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "strataevo.evolution.cli.create_evaluator",
+                    "strataevo.evolution.generation.create_evaluator",
                     return_value=FakeEvaluator(root, config),
                 ),
-                patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
-                patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
-                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
-                patch("strataevo.evolution.cli.mutate", side_effect=fake_mutate),
+                patch("strataevo.evolution.generation.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.generation.plan_evolution", return_value=plan),
+                patch("strataevo.evolution.generation.validation_commands", return_value=[]),
+                patch("strataevo.evolution.generation.mutate", side_effect=fake_mutate),
             ):
                 self.assertEqual(run_one_generation(config_path), 0)
 
@@ -650,19 +653,19 @@ class EvolutionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "strataevo.evolution.cli.create_evaluator",
+                    "strataevo.evolution.generation.create_evaluator",
                     return_value=FakeEvaluator(root, config),
                 ),
                 patch(
-                    "strataevo.evolution.cli.diagnose_evaluation",
+                    "strataevo.evolution.generation.diagnose_evaluation",
                     return_value=self._diagnosis_report(),
                 ),
                 patch(
-                    "strataevo.evolution.cli.plan_evolution",
+                    "strataevo.evolution.generation.plan_evolution",
                     return_value=self._plan_report(),
                 ),
-                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
-                patch("strataevo.evolution.cli.mutate", side_effect=fake_mutate),
+                patch("strataevo.evolution.generation.validation_commands", return_value=[]),
+                patch("strataevo.evolution.generation.mutate", side_effect=fake_mutate),
             ):
                 self.assertEqual(run_one_generation(config_path), 0)
 
@@ -710,9 +713,9 @@ class EvolutionTests(unittest.TestCase):
             )
 
             with (
-                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
+                patch("strataevo.evolution.generation.validation_commands", return_value=[]),
                 patch(
-                    "strataevo.evolution.cli.diagnose_evaluation",
+                    "strataevo.evolution.generation.diagnose_evaluation",
                     side_effect=ValueError("invalid diagnosis JSON"),
                 ),
             ):
@@ -746,10 +749,10 @@ class EvolutionTests(unittest.TestCase):
             )
             plan = self._plan_report()
             with (
-                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
-                patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
-                patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
-                patch("strataevo.evolution.cli.mutate", return_value=agent_result),
+                patch("strataevo.evolution.generation.validation_commands", return_value=[]),
+                patch("strataevo.evolution.generation.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.generation.plan_evolution", return_value=plan),
+                patch("strataevo.evolution.generation.mutate", return_value=agent_result),
             ):
                 self.assertEqual(run_one_generation(run_dir / "config.json"), 0)
 
@@ -856,13 +859,13 @@ class EvolutionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "strataevo.evolution.cli.create_evaluator",
+                    "strataevo.evolution.generation.create_evaluator",
                     return_value=FakeEvaluator(),
                 ),
-                patch("strataevo.evolution.cli.diagnose_evaluation", return_value=diagnosis),
-                patch("strataevo.evolution.cli.plan_evolution", return_value=plan),
-                patch("strataevo.evolution.cli.validation_commands", return_value=[]),
-                patch("strataevo.evolution.cli.evolve_context", return_value=result),
+                patch("strataevo.evolution.generation.diagnose_evaluation", return_value=diagnosis),
+                patch("strataevo.evolution.generation.plan_evolution", return_value=plan),
+                patch("strataevo.evolution.generation.validation_commands", return_value=[]),
+                patch("strataevo.evolution.generation.evolve_context", return_value=result),
             ):
                 self.assertEqual(run_one_generation(config_path), 0)
 
