@@ -45,13 +45,24 @@ class DiagnosisTests(unittest.TestCase):
                     MemoryDiagnosis(
                         primary_layer="tools",
                         related_layers=[],
-                        problem="A previous tool hypothesis failed.",
-                        affected_tasks=["HumanEval/25"],
+                        problem="A previous tool hypothesis for HumanEval/130 failed.",
+                        affected_tasks=["HumanEval/130"],
                         proposed_direction="Change the tool description.",
                         confidence=0.7,
-                    )
+                    ),
+                    MemoryDiagnosis(
+                        primary_layer="model",
+                        related_layers=[],
+                        problem="Task 1 failed at learning rate 0.0001.",
+                        affected_tasks=["1"],
+                        proposed_direction="Change the model.",
+                        confidence=0.6,
+                    ),
                 ],
-                plan={},
+                plan={
+                    "target_diagnosis": 0,
+                    "hypothesis": "Task 1 failed at learning rate 0.0001.",
+                },
                 outcome_observations=[],
                 changed_paths=["src/tinyagent/workspace.py"],
                 patch_path="generation-0001/changes.patch",
@@ -84,6 +95,9 @@ class DiagnosisTests(unittest.TestCase):
         self.assertNotIn('"tool_sequence"', request)
         self.assertIn('"prior_evolution"', request)
         self.assertIn("task score did not improve", request)
+        self.assertIn("A previous tool hypothesis for <historical-task> failed", request)
+        self.assertNotIn("HumanEval/130", request)
+        self.assertIn("Task <historical-task> failed at learning rate 0.0001", request)
         self.assertIn('"passed": false', request)
         self.assertIn('"single candidate evaluation against recorded parent"', request)
         self.assertIn('"executor_capabilities"', request)
@@ -92,6 +106,26 @@ class DiagnosisTests(unittest.TestCase):
         self.assertNotIn('"atan2"', request)
         system_prompt = model.requests[0][0].content
         self.assertIn("factual description", system_prompt)
+        self.assertIn("affected_tasks value must come from the current cases", system_prompt)
+
+    def test_historical_task_is_not_valid_current_evidence(self):
+        response = {
+            "diagnoses": [
+                {
+                    "primary_layer": "model",
+                    "related_layers": [],
+                    "problem": "A historical failure was repeated.",
+                    "evidence": ["HumanEval/130 previously failed."],
+                    "affected_tasks": ["HumanEval/130"],
+                    "proposed_direction": "Repeat the historical repair.",
+                    "confidence": 0.8,
+                }
+            ]
+        }
+        model = ScriptedModel([Message("assistant", json.dumps(response))])
+
+        with self.assertRaisesRegex(ValueError, "outside its evidence"):
+            EvidenceDiagnoser(model, repair_retries=0).diagnose(self._bundle())
 
     def test_passed_max_steps_case_is_explicitly_an_efficiency_signal(self):
         response = {

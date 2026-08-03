@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -141,7 +142,7 @@ class EvidenceDiagnoser:
             "executor_capabilities": capabilities or {},
             "cases": [],
             "forced_layer": force_layer.value if force_layer else None,
-            "prior_evolution": memory_context(
+            "prior_evolution": _diagnosis_memory_context(
                 history or [],
                 max_chars=min(MEMORY_LIMIT_CHARS, self.context_limit_chars // 5),
             ),
@@ -209,13 +210,14 @@ actually change.
 
 Use only supplied observations. Cite task IDs and concrete events in evidence. If forced_layer is
 not null, include an evidence-grounded diagnosis whose primary_layer matches it. Prior evolution
-records are outcomes, not proof of the current cause: use them to avoid blindly repeating rejected
-hypotheses and to preserve improvements that were accepted. Do not propose code or claim hidden
-causes. Treat each case's passed field as authoritative. A passed case that stopped at max_steps is
-a successful but potentially inefficient case, not an incomplete task; never describe it as missing
-a solution. When any failed cases exist, diagnose mechanisms that can improve those failures before
-pure efficiency issues from passed cases. Prefer the layer closest to the failed mechanism rather
-than listing every layer. Return one to six diagnoses as exactly this JSON object:
+records use redacted historical task identifiers and are outcomes, not proof of the current cause:
+use them to avoid blindly repeating rejected hypotheses and to preserve improvements that were
+accepted. Every affected_tasks value must come from the current cases. Do not propose code or claim
+hidden causes. Treat each case's passed field as authoritative. A passed case that stopped at
+max_steps is a successful but potentially inefficient case, not an incomplete task; never describe
+it as missing a solution. When any failed cases exist, diagnose mechanisms that can improve those
+failures before pure efficiency issues from passed cases. Prefer the layer closest to the failed
+mechanism rather than listing every layer. Return one to six diagnoses as exactly this JSON object:
 {
   "diagnoses": [
     {
@@ -320,6 +322,50 @@ def _message_size(payload: dict[str, Any]) -> int:
         + len(user_prefix)
         + len(json.dumps(payload, indent=2, ensure_ascii=False))
     )
+
+
+def _diagnosis_memory_context(
+    history: list[EvolutionMemoryEntry],
+    *,
+    max_chars: int,
+) -> list[dict[str, Any]]:
+    context = memory_context(history, max_chars=max_chars)
+    task_ids = {
+        task_id
+        for entry in history
+        for diagnosis in entry.diagnoses
+        for task_id in diagnosis.affected_tasks
+    }
+    task_ids.update(
+        task_id
+        for entry in history
+        for tasks in (
+            entry.outcome.fixed_tasks,
+            entry.outcome.regressed_tasks,
+            entry.outcome.remaining_failures,
+        )
+        for task_id in tasks
+    )
+    return _redact_historical_tasks(context, task_ids)
+
+
+def _redact_historical_tasks(value: Any, task_ids: set[str]) -> Any:
+    if isinstance(value, str):
+        for task_id in sorted(task_ids, key=len, reverse=True):
+            value = re.sub(
+                rf"(?<![\w/]){re.escape(task_id)}(?![\w/])",
+                "<historical-task>",
+                value,
+            )
+        return value
+    if isinstance(value, list):
+        return [_redact_historical_tasks(item, task_ids) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _redact_historical_tasks(item, task_ids)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _compact_tool_events(events: list[ToolEvent], limit: int) -> list[dict[str, Any]]:
