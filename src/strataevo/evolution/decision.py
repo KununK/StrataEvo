@@ -66,8 +66,8 @@ class EvolutionDecision:
         if layer == EvolutionLayer.ARCHITECTURE:
             if not files or any(not _is_mutable(path, config.mutable_paths) for path in files):
                 raise ValueError("architecture decision requires mutable likely_files")
-        elif files:
-            raise ValueError("only architecture decisions may name source files")
+        else:
+            files = []
         return cls(layer, evidence, tasks, hypothesis, intervention, files)
 
 
@@ -75,6 +75,7 @@ SYSTEM_PROMPT = """Choose one evidence-grounded failure mechanism and one concre
 Use only current-task evidence. Prior generations only show which interventions succeeded or
 failed. Select the closest layer: model weights, reusable context, model-facing tool descriptions,
 or agent architecture. Architecture may modify only src/tinyagent and must name likely files.
+Every other layer must return an empty likely_files list.
 Choose model only when model_evolution_enabled is true. Do not repeat a rejected intervention
 without new evidence. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],

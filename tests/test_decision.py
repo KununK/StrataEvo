@@ -56,6 +56,24 @@ class DecisionTests(unittest.TestCase):
                 data, {"task/1"}, EvolutionConfig(repo=".", run_name="test")
             )
 
+    def test_external_decision_ignores_source_file_suggestions(self):
+        data = {
+            "layer": "model",
+            "evidence": ["x"],
+            "affected_tasks": ["task/1"],
+            "hypothesis": "x",
+            "intervention": "x",
+            "likely_files": ["src/tinyagent/agent.py"],
+        }
+        decision = EvolutionDecision.from_dict(
+            data,
+            {"task/1"},
+            EvolutionConfig(
+                repo=".", run_name="test", model_evolution=True, force_layer="model"
+            ),
+        )
+        self.assertEqual(decision.likely_files, [])
+
     @staticmethod
     def _bundle():
         case = TaskEvidence(
