@@ -158,7 +158,6 @@ def _repair_once(
         ]
     )[:12_000]
     candidate = output_dir / "candidates" / f"{_safe_name(task_id)}-{attempt:02d}.py"
-    session_dir = output_dir / "sessions" / f"attempt-{attempt:02d}"
     generation, result = run_agent_task(
         task,
         model,
@@ -166,7 +165,6 @@ def _repair_once(
         task_source=render_task(task),
         evaluate=lambda source, timeout: verify(task, source, timeout),
         benchmark=f"{config.benchmark}-repair",
-        session_dir=session_dir,
         max_steps=config.benchmark_max_steps,
         test_timeout=config.test_timeout,
         system_prompt=REPAIR_SYSTEM_PROMPT,
@@ -238,7 +236,4 @@ def _write_collection(
 
 
 def _safe_name(task_id: str) -> str:
-    return (
-        "".join(character if character.isalnum() else "_" for character in task_id)
-        or "task"
-    )
+    return "".join(character if character.isalnum() else "_" for character in task_id) or "task"

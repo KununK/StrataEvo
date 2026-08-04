@@ -1,10 +1,7 @@
-"""Structured evidence extracted from coding-agent benchmark artifacts."""
+"""Observable task outcomes supplied to the evolution decider."""
 
 from __future__ import annotations
 
-import argparse
-import json
-import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -14,52 +11,32 @@ from .utils.io import read_json, read_jsonl, write_json
 
 @dataclass(slots=True)
 class ToolEvent:
-    """One tool call and its matching result, in execution order."""
-
     index: int
-    call_id: str
     name: str
     arguments: dict[str, Any]
     result: str | None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ToolEvent:
-        arguments = data.get("arguments", {})
-        if not isinstance(arguments, dict):
-            raise ValueError("tool event arguments must be an object")
-        result = data.get("result")
-        if result is not None and not isinstance(result, str):
-            raise ValueError("tool event result must be a string or null")
         return cls(
-            index=int(data["index"]),
-            call_id=str(data.get("call_id", "")),
-            name=str(data["name"]),
-            arguments=arguments,
-            result=result,
+            int(data["index"]),
+            str(data["name"]),
+            dict(data.get("arguments", {})),
+            str(data["result"]) if data.get("result") is not None else None,
         )
 
 
 @dataclass(slots=True)
 class TaskEvidence:
-    """Observable evidence for one evaluated task, without layer attribution."""
-
     task_id: str
-    entry_point: str
     status: str
     passed: bool
     stop_reason: str
     steps: int
-    input_tokens: int
-    output_tokens: int
-    generation_seconds: float
-    test_seconds: float
-    candidate_path: str | None
     candidate_present: bool
     candidate_created: bool
     tool_events: list[ToolEvent]
     error: str
-    generation_path: str
-    session_path: str | None
     signals: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,45 +44,28 @@ class TaskEvidence:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskEvidence:
-        values = dict(data)
-        values.pop("artifact_delete_attempted", None)
-        values.pop("candidate_deleted", None)
-        raw_events = values.pop("tool_events", None)
-        if raw_events is None:
-            raw_events = _legacy_tool_events(
-                values.pop("tool_sequence", []),
-                values.pop("shell_commands", []),
-            )
-        else:
-            values.pop("tool_sequence", None)
-            values.pop("shell_commands", None)
-        if not isinstance(raw_events, list) or not all(
-            isinstance(item, dict) for item in raw_events
-        ):
-            raise ValueError("tool_events must be a list of objects")
-        values["tool_events"] = [ToolEvent.from_dict(item) for item in raw_events]
-        values["signals"] = [
-            item
-            for item in values.get("signals", [])
-            if item not in {"artifact_deleted", "artifact_delete_attempted"}
-        ]
-        return cls(**values)
+        return cls(
+            task_id=str(data["task_id"]),
+            status=str(data["status"]),
+            passed=bool(data["passed"]),
+            stop_reason=str(data.get("stop_reason", "")),
+            steps=int(data.get("steps", 0)),
+            candidate_present=bool(data.get("candidate_present", False)),
+            candidate_created=bool(data.get("candidate_created", False)),
+            tool_events=[ToolEvent.from_dict(item) for item in data.get("tool_events", [])],
+            error=str(data.get("error", "")),
+            signals=[str(item) for item in data.get("signals", [])],
+        )
 
 
 @dataclass(slots=True)
 class EvidenceBundle:
-    """Evaluation summary plus task-level evidence for a later diagnosis stage."""
-
-    evaluator: str
-    source_dir: str
     summary: dict[str, Any]
     signal_counts: dict[str, int]
     cases: list[TaskEvidence]
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "evaluator": self.evaluator,
-            "source_dir": self.source_dir,
             "summary": self.summary,
             "signal_counts": self.signal_counts,
             "cases": [case.to_dict() for case in self.cases],
@@ -113,245 +73,101 @@ class EvidenceBundle:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvidenceBundle:
-        values = dict(data)
-        values["cases"] = [TaskEvidence.from_dict(item) for item in values.get("cases", [])]
-        signal_counts = dict(values.get("signal_counts", {}))
-        signal_counts.pop("artifact_deleted", None)
-        signal_counts.pop("artifact_delete_attempted", None)
-        values["signal_counts"] = dict(sorted(signal_counts.items()))
-        return cls(**values)
+        return cls(
+            dict(data["summary"]),
+            {str(key): int(value) for key, value in data.get("signal_counts", {}).items()},
+            [TaskEvidence.from_dict(item) for item in data.get("cases", [])],
+        )
 
 
 class CodingAgentEvidenceCollector:
-    """Join task results, generations, candidates, and sessions."""
-
-    artifact_name = "solution.py"
-
-    def __init__(self, evaluator: str) -> None:
-        self.evaluator = evaluator
-
-    def collect(self, output_dir: str | Path) -> EvidenceBundle:
+    def collect_and_write(self, output_dir: str | Path) -> EvidenceBundle:
         root = Path(output_dir).resolve()
-        summary = read_json(root / "summary.json")
-        results = _index_rows(read_jsonl(root / "results.jsonl"), "results")
-        generations = _index_rows(read_jsonl(root / "generations.jsonl"), "generations")
-        if set(results) != set(generations):
-            missing_results = sorted(set(generations).difference(results))
-            missing_generations = sorted(set(results).difference(generations))
-            raise ValueError(
-                f"{self.evaluator} result/generation task mismatch: "
-                f"missing_results={missing_results}, missing_generations={missing_generations}"
-            )
-
+        results = _rows_by_task(read_jsonl(root / "results.jsonl"))
+        generations = _rows_by_task(read_jsonl(root / "generations.jsonl"))
+        if results.keys() != generations.keys():
+            raise ValueError("benchmark results and generations contain different tasks")
         cases = [
-            self._collect_case(root, row, generations[task_id]) for task_id, row in results.items()
+            _task_evidence(task_id, results[task_id], generations[task_id])
+            for task_id in sorted(results)
         ]
-        cases.sort(key=lambda item: _task_sort_key(item.task_id))
-        evaluated = int(summary.get("evaluated", len(cases)))
-        if evaluated != len(cases):
-            raise ValueError(f"summary evaluated={evaluated}, but found {len(cases)} task results")
-
-        signal_counts: dict[str, int] = {}
+        signals: dict[str, int] = {}
         for case in cases:
             for signal in case.signals:
-                signal_counts[signal] = signal_counts.get(signal, 0) + 1
-        return EvidenceBundle(
-            evaluator=self.evaluator,
-            source_dir=str(root),
-            summary=summary,
-            signal_counts=dict(sorted(signal_counts.items())),
-            cases=cases,
+                signals[signal] = signals.get(signal, 0) + 1
+        bundle = EvidenceBundle(
+            read_json(root / "summary.json"),
+            signals,
+            cases,
         )
-
-    def collect_and_write(
-        self, output_dir: str | Path, destination: str | Path | None = None
-    ) -> EvidenceBundle:
-        bundle = self.collect(output_dir)
-        target = Path(destination) if destination else Path(output_dir) / "evidence.json"
-        write_json(target, bundle.to_dict())
+        write_json(root / "evidence.json", bundle.to_dict())
         return bundle
 
-    def _collect_case(
-        self,
-        root: Path,
-        result: dict[str, Any],
-        generation: dict[str, Any],
-    ) -> TaskEvidence:
-        task_id = str(result["task_id"])
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", task_id).strip("_") or "task"
-        candidate_file = root / "candidates" / f"{safe_name}.py"
-        session_file = root / "sessions" / f"{safe_name}.json"
-        messages = generation.get("messages") or []
-        tool_events = _tool_events(messages)
-        created = any(
-            event.name == "write_file"
-            and _is_artifact(str(event.arguments.get("path", "")), self.artifact_name)
-            for event in tool_events
-        )
-        candidate_present = candidate_file.is_file()
-        status = str(result.get("status", "unknown"))
-        stop_reason = str(generation.get("stop_reason", result.get("agent_stop_reason", "")))
-        signals = _signals(
-            status=status,
-            stop_reason=stop_reason,
-            candidate_present=candidate_present,
-            candidate_created=created,
-            agent_error=str(generation.get("agent_error", "")),
-        )
-        error = str(generation.get("agent_error") or result.get("stderr") or "")
-        return TaskEvidence(
-            task_id=task_id,
-            entry_point=str(result.get("entry_point", generation.get("entry_point", ""))),
-            status=status,
-            passed=bool(result.get("passed", False)),
-            stop_reason=stop_reason,
-            steps=int(generation.get("steps", result.get("agent_steps", 0))),
-            input_tokens=int((generation.get("usage") or {}).get("input_tokens", 0)),
-            output_tokens=int((generation.get("usage") or {}).get("output_tokens", 0)),
-            generation_seconds=float(generation.get("generation_seconds", 0.0)),
-            test_seconds=float(result.get("test_seconds", 0.0)),
-            candidate_path=str(candidate_file) if candidate_present else None,
-            candidate_present=candidate_present,
-            candidate_created=created,
-            tool_events=tool_events,
-            error=error,
-            generation_path=str(root / "generations.jsonl"),
-            session_path=str(session_file) if session_file.is_file() else None,
-            signals=signals,
-        )
 
-def _signals(
-    *,
-    status: str,
-    stop_reason: str,
-    candidate_present: bool,
-    candidate_created: bool,
-    agent_error: str,
-) -> list[str]:
-    signals: list[str] = []
-    if status != "pass":
-        signals.append(status)
-    if stop_reason == "max_steps":
+def _task_evidence(
+    task_id: str,
+    result: dict[str, Any],
+    generation: dict[str, Any],
+) -> TaskEvidence:
+    events = _tool_events(generation.get("messages") or [])
+    created = any(
+        event.name == "write_file"
+        and Path(str(event.arguments.get("path", ""))).name == "solution.py"
+        for event in events
+    )
+    candidate = result.get("candidate_path")
+    present = bool(candidate and Path(candidate).is_file())
+    status = str(result.get("status", "unknown"))
+    stop = str(generation.get("stop_reason", result.get("agent_stop_reason", "")))
+    error = str(generation.get("agent_error") or result.get("stderr") or "")
+    signals = [] if status == "pass" else [status]
+    if stop == "max_steps":
         signals.append("max_steps")
-    if not candidate_present:
+    if not present:
         signals.append("artifact_missing")
-    if candidate_created and not candidate_present:
+    if created and not present:
         signals.append("artifact_created_then_missing")
-    if stop_reason == "completed" and not candidate_present:
-        signals.append("completed_without_artifact")
-    if agent_error:
+    if error:
         signals.append("agent_error")
-    return signals
-
-
-def _is_artifact(path: str, artifact_name: str) -> bool:
-    return bool(path) and Path(path).name == artifact_name
+    return TaskEvidence(
+        task_id,
+        status,
+        bool(result.get("passed")),
+        stop,
+        int(generation.get("steps", 0)),
+        present,
+        created,
+        events,
+        error,
+        signals,
+    )
 
 
 def _tool_events(messages: list[dict[str, Any]]) -> list[ToolEvent]:
     events: list[ToolEvent] = []
     pending: dict[str, ToolEvent] = {}
-    unmatched: list[ToolEvent] = []
     for message in messages:
         for call in message.get("tool_calls") or []:
-            call_id = str(call.get("id") or "")
             event = ToolEvent(
-                index=len(events) + 1,
-                call_id=call_id,
-                name=str(call.get("name") or ""),
-                arguments=_tool_arguments(call.get("arguments")),
-                result=None,
+                len(events) + 1,
+                str(call.get("name", "")),
+                dict(call.get("arguments") or {}),
+                None,
             )
             events.append(event)
-            if call_id:
-                pending[call_id] = event
-            else:
-                unmatched.append(event)
-        if message.get("role") != "tool":
-            continue
-        call_id = str(message.get("tool_call_id") or "")
-        event = pending.pop(call_id, None) if call_id else None
-        if event is None and not call_id and unmatched:
-            event = unmatched.pop(0)
-        if event is not None:
-            event.result = str(message.get("content") or "")
+            pending[str(call.get("id", ""))] = event
+        if message.get("role") == "tool":
+            event = pending.get(str(message.get("tool_call_id", "")))
+            if event:
+                event.result = str(message.get("content", ""))
     return events
 
 
-def _tool_arguments(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {"raw": value}
-        if isinstance(parsed, dict):
-            return parsed
-    return {}
-
-
-def _legacy_tool_events(names: Any, shell_commands: Any) -> list[dict[str, Any]]:
-    if not isinstance(names, list) or not isinstance(shell_commands, list):
-        raise ValueError("legacy tool evidence must contain lists")
-    commands = iter(str(item) for item in shell_commands)
-    events: list[dict[str, Any]] = []
-    for index, name in enumerate(names, 1):
-        tool_name = str(name)
-        arguments = {"command": next(commands, "")} if tool_name == "run_shell" else {}
-        events.append(
-            {
-                "index": index,
-                "call_id": "",
-                "name": tool_name,
-                "arguments": arguments,
-                "result": None,
-            }
-        )
-    return events
-
-
-def _index_rows(rows: list[dict[str, Any]], label: str) -> dict[str, dict[str, Any]]:
-    indexed: dict[str, dict[str, Any]] = {}
+def _rows_by_task(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
     for row in rows:
-        task_id = str(row.get("task_id", ""))
-        if not task_id:
-            raise ValueError(f"{label} row is missing task_id")
-        if task_id in indexed:
-            raise ValueError(f"duplicate {label} task_id: {task_id}")
-        indexed[task_id] = row
-    return indexed
-
-
-def _task_sort_key(task_id: str) -> tuple[str, int, str]:
-    prefix, separator, suffix = task_id.rpartition("/")
-    if separator and suffix.isdigit():
-        return prefix, int(suffix), task_id
-    return task_id, -1, task_id
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Collect structured benchmark evidence")
-    parser.add_argument("output_dir", help="benchmark output directory")
-    parser.add_argument("--benchmark", choices=("humaneval", "mbpp"), default="humaneval")
-    parser.add_argument("--output", help="Evidence JSON path; defaults to OUTPUT_DIR/evidence.json")
-    args = parser.parse_args(argv)
-    bundle = CodingAgentEvidenceCollector(args.benchmark).collect_and_write(
-        args.output_dir, args.output
-    )
-    print(
-        json.dumps(
-            {
-                "evaluator": bundle.evaluator,
-                "cases": len(bundle.cases),
-                "signal_counts": bundle.signal_counts,
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+        task_id = str(row["task_id"])
+        if task_id in result:
+            raise ValueError(f"duplicate task: {task_id}")
+        result[task_id] = row
+    return result

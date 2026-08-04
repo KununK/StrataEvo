@@ -4,7 +4,6 @@ import unittest
 from unittest.mock import patch
 
 from tinyagent import Message, OpenAICompatibleModel, ToolCall, Usage
-from tinyagent.cli import build_parser
 from tinyagent.model import DEFAULT_BASE_URL, DEFAULT_MODEL
 
 
@@ -28,9 +27,6 @@ class ModelTests(unittest.TestCase):
         model = OpenAICompatibleModel()
         self.assertEqual(model.model, DEFAULT_MODEL)
         self.assertEqual(model.base_url, DEFAULT_BASE_URL)
-        args = build_parser().parse_args([])
-        self.assertEqual(args.model, DEFAULT_MODEL)
-        self.assertEqual(args.base_url, DEFAULT_BASE_URL)
 
     @patch("urllib.request.urlopen")
     def test_openai_compatible_model_parses_tool_call(self, urlopen):

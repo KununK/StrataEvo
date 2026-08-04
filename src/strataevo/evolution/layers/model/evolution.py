@@ -11,12 +11,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Protocol
 
-from ...diagnosis import Diagnosis
-from ...plan import EvolutionPlan
+from ...decision import EvolutionDecision
 from ...runtime.evaluation import BenchmarkEvaluator
 from ...types import EvaluationReport, EvolutionConfig
 from ...utils.io import read_jsonl
-from ..profile import ProfileEvolutionResult, evaluate_profile, task_changes
+from ..profile import ProfileEvolutionResult, evaluate_profile
 from .repair import RepairCollection, collect_failed_task_repairs
 
 
@@ -60,9 +59,7 @@ class VLLMAdapterRuntime:
                 return
         except urllib.error.HTTPError as error:
             detail = error.read().decode(errors="replace")
-            raise RuntimeError(
-                f"vLLM adapter request failed ({error.code}): {detail}"
-            ) from error
+            raise RuntimeError(f"vLLM adapter request failed ({error.code}): {detail}") from error
         except (urllib.error.URLError, TimeoutError) as error:
             raise RuntimeError(f"vLLM adapter request failed: {error}") from error
 
@@ -88,11 +85,7 @@ def build_training_dataset(
     for row in read_jsonl(repair_dir / "generations.jsonl", missing_ok=True):
         task_id = str(row["task_id"])
         key = (task_id, int(row["repair_attempt"]))
-        if (
-            task_id in selected_repairs
-            or not repair_results.get(key)
-            or not row.get("messages")
-        ):
+        if task_id in selected_repairs or not repair_results.get(key) or not row.get("messages"):
             continue
         repaired_examples.append(
             {"task_id": row["task_id"], "source": "repair", "messages": row["messages"]}
@@ -116,9 +109,7 @@ def build_training_dataset(
         "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in examples),
         encoding="utf-8",
     )
-    trained_repairs = [
-        str(item["task_id"]) for item in examples if item["source"] == "repair"
-    ]
+    trained_repairs = [str(item["task_id"]) for item in examples if item["source"] == "repair"]
     return {
         "examples": len(examples),
         "repair_examples": len(trained_repairs),
@@ -136,22 +127,21 @@ def evolve_model(
     *,
     parent_model: str,
     parent_adapter: dict[str, Any] | None,
-    diagnosis: Diagnosis,
-    plan: EvolutionPlan,
+    decision: EvolutionDecision,
     runtime: AdapterRuntime | None = None,
 ) -> ProfileEvolutionResult:
     """Train, load, evaluate, and either retain or remove one LoRA candidate."""
     runtime = runtime or VLLMAdapterRuntime(config.base_url)
     model_dir = generation_dir / "model"
     data_path = model_dir / "verified_trajectories.jsonl"
-    guidance = _repair_guidance(diagnosis, plan)
+    guidance = _repair_guidance(decision)
     print("[evolution] collecting verifier-guided repairs for failed tasks", flush=True)
     repairs = collect_failed_task_repairs(
         config,
         parent_report.output_dir,
         model_dir / "repairs",
         model_name=parent_model,
-        task_ids=set(diagnosis.affected_tasks),
+        task_ids=set(decision.affected_tasks),
         guidance=guidance,
     )
     training_data = build_training_dataset(
@@ -178,25 +168,10 @@ def evolve_model(
             else None
         ),
         "training_examples": sample_count,
-        "training_data": str(data_path),
-        "repair_collection": repairs.to_dict(),
-        "training_dataset": training_data,
-        "planned_intervention": {
-            "affected_tasks": diagnosis.affected_tasks,
-            "hypothesis": plan.hypothesis,
-            "intervention": plan.intervention,
-        },
-        "executed_intervention": {
-            "targeted_tasks": repairs.failed_tasks,
-            "repair_guidance": guidance,
-            "repair_attempts": repairs.attempts,
-            "repaired_tasks": repairs.repaired_tasks,
-            "training": None,
-        },
     }
     if not training_data["repair_examples"]:
         reason = (
-            "selected plan affected no failed task"
+            "selected decision affected no failed task"
             if not repairs.failed_tasks
             else "no selected failed task produced a verifier-passing repair trajectory"
         )
@@ -204,7 +179,6 @@ def evolve_model(
             "rejected",
             "model_training_skipped",
             reason,
-            None,
             None,
             candidate,
         )
@@ -219,7 +193,6 @@ def evolve_model(
         "lora_rank": config.sft_lora_rank,
         "learning_rate": config.sft_learning_rate,
     }
-    candidate["executed_intervention"]["training"] = train_config
     train_config_path = model_dir / "train_config.json"
     model_dir.mkdir(parents=True, exist_ok=True)
     train_config_path.write_text(
@@ -228,7 +201,6 @@ def evolve_model(
     )
     train_log = model_dir / "train.log"
     _run_training(config, train_config_path, train_log)
-    candidate["train_log"] = str(train_log)
 
     def activate(candidate_record: dict[str, Any] | None) -> None:
         if candidate_record:
@@ -250,27 +222,20 @@ def evolve_model(
         candidate,
         activate,
     )
-    if evaluation.candidate_report:
-        candidate["screening_task_changes"] = task_changes(
-            parent_report.output_dir,
-            evaluation.candidate_report.output_dir,
-        )
     return ProfileEvolutionResult(
         evaluation.decision,
         evaluation.outcome_type,
         evaluation.reason,
         evaluation.candidate_report,
-        evaluation.promotion_parent_report,
         candidate,
     )
 
 
-def _repair_guidance(diagnosis: Diagnosis, plan: EvolutionPlan) -> str:
+def _repair_guidance(decision: EvolutionDecision) -> str:
     return "\n".join(
         [
-            f"Diagnosed problem: {diagnosis.problem}",
-            f"Causal hypothesis: {plan.hypothesis}",
-            f"Planned intervention: {plan.intervention}",
+            f"Causal hypothesis: {decision.hypothesis}",
+            f"Planned intervention: {decision.intervention}",
         ]
     )
 

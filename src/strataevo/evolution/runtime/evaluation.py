@@ -11,12 +11,9 @@ from typing import Any, Protocol
 
 from ..evidence import CodingAgentEvidenceCollector
 from ..types import EvaluationReport, EvolutionConfig
-from .contract import EvaluationContract
 
 
 class Evaluator(Protocol):
-    contract: EvaluationContract
-
     def set_context(self, context: dict[str, Any] | None) -> None: ...
 
     def set_tool_profile(self, profile: dict[str, Any] | None) -> None: ...
@@ -66,8 +63,7 @@ def promotion_decision(
         reason = (
             "pass@1 strictly improved"
             if accepted
-            else f"pass@1 {candidate.task_score:.6f} did not exceed parent "
-            f"{parent.task_score:.6f}"
+            else f"pass@1 {candidate.task_score:.6f} did not exceed parent {parent.task_score:.6f}"
         )
         return accepted, reason
     gain = int(observation["passed_gain"])
@@ -98,8 +94,6 @@ class BenchmarkSpec:
     module: str
     execution_module: str
     objective: str
-    direct_paths: tuple[str, ...] = ("src/tinyagent",)
-    deferred_paths: tuple[str, ...] = ("src/strataevo/evolution/mutator.py",)
     arguments: tuple[str, ...] = ()
 
 
@@ -155,12 +149,6 @@ class BenchmarkEvaluator:
         self.model = config.model
         self.context: dict[str, Any] | None = None
         self.tool_profile: dict[str, Any] | None = None
-        self.contract = EvaluationContract(
-            benchmark=spec.display_name,
-            objective=spec.objective,
-            direct_paths=spec.direct_paths,
-            deferred_paths=spec.deferred_paths,
-        )
 
     def set_model(self, model: str) -> None:
         self.model = model
@@ -221,7 +209,7 @@ class BenchmarkEvaluator:
         if not passed or not summary_path.is_file():
             raise RuntimeError(f"{self.spec.display_name} failed; see {log_path}\n{output[-2000:]}")
         metrics = json.loads(summary_path.read_text(encoding="utf-8"))
-        evidence = CodingAgentEvidenceCollector(self.spec.name).collect_and_write(output_dir)
+        evidence = CodingAgentEvidenceCollector().collect_and_write(output_dir)
         task_score = float(metrics["pass_at_1"])
         evaluated = max(int(metrics.get("evaluated", 0)), 1)
         metrics["average_tokens"] = (
@@ -229,7 +217,6 @@ class BenchmarkEvaluator:
         ) / evaluated
         metrics["evidence_path"] = str(output_dir / "evidence.json")
         metrics["evidence_signal_counts"] = evidence.signal_counts
-        metrics["evaluation_contract"] = self.contract.to_dict()
         print(f"[evolution] pass@1={task_score:.4f}", flush=True)
         return EvaluationReport(task_score, metrics, str(output_dir), str(log_path))
 

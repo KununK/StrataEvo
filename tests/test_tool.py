@@ -45,7 +45,6 @@ class ToolTests(unittest.TestCase):
             "Read one file\n\nInspect relevant files first.",
         )
         self.assertIs(evolved.get("read").function, read.function)
-        self.assertEqual(evolved.get("read").requires_approval, read.requires_approval)
 
     def test_registry_rejects_unknown_description_addenda(self):
         with self.assertRaisesRegex(ValueError, "unknown tools"):

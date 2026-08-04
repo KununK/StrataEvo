@@ -9,10 +9,8 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel
 
-from ..diagnosis import DiagnosisReport
+from ..decision import EvolutionDecision
 from ..memory import EvolutionMemoryEntry, memory_context
-from ..plan import EvolutionPlanReport
-from ..runtime.contract import EvaluationContract
 from ..runtime.evaluation import BenchmarkEvaluator
 from ..runtime.structured import request_json
 from ..types import EvaluationReport, EvolutionConfig
@@ -52,19 +50,14 @@ class ContextEvolver:
     def create_candidate(
         self,
         parent: ContextProfile,
-        diagnosis: DiagnosisReport,
-        plan: EvolutionPlanReport,
+        decision: EvolutionDecision,
         history: list[EvolutionMemoryEntry],
-        contract: EvaluationContract,
         feedback: list[dict[str, Any]] | None = None,
     ) -> tuple[ContextProfile, dict[str, Any]]:
-        selected = diagnosis.diagnoses[plan.plan.target_diagnosis]
         payload = {
             "parent_context": parent.to_dict(),
-            "diagnosis": selected.to_dict(),
-            "plan": plan.plan.to_dict(),
-            "evaluation_contract": contract.to_dict(),
-            "prior_evolution": memory_context(history, max_chars=8_000),
+            "decision": decision.to_dict(),
+            "prior_evolution": memory_context(history),
             "refinement_feedback": (feedback or [])[-1:],
         }
 
@@ -80,7 +73,7 @@ class ContextEvolver:
                 Message("system", CONTEXT_EVOLVER_SYSTEM_PROMPT),
                 Message(
                     "user",
-                    "Create one general context candidate for the supplied plan. "
+                    "Create one general context candidate for the supplied decision. "
                     "When refinement_feedback is present, revise the prior candidate in response "
                     "to its measured outcome. "
                     "Return only the requested JSON.\n\n"
@@ -118,8 +111,7 @@ def evolve_context(
     generation_dir: Path,
     parent_report: EvaluationReport,
     evaluator: BenchmarkEvaluator,
-    diagnosis: DiagnosisReport,
-    plan: EvolutionPlanReport,
+    decision: EvolutionDecision,
     history: list[EvolutionMemoryEntry],
     *,
     parent_context: dict[str, Any] | None,
@@ -142,10 +134,8 @@ def evolve_context(
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         candidate, metadata = evolver.create_candidate(
             parent,
-            diagnosis,
-            plan,
+            decision,
             history,
-            evaluator.contract,
             feedback,
         )
         return candidate.to_dict(), metadata

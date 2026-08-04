@@ -1,11 +1,11 @@
-"""Persistent records shared by the self-evolution loop."""
+"""Small persistent types for the evolution loop."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-DEFAULT_MUTABLE_PATHS = ["src/tinyagent", "src/strataevo/evolution/mutator.py"]
+DEFAULT_MUTABLE_PATHS = ["src/tinyagent"]
 
 
 @dataclass(slots=True)
@@ -41,17 +41,7 @@ class EvolutionConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvolutionConfig:
-        values = dict(data)
-        for legacy in (
-            "generations",
-            "step_penalty",
-            "token_penalty",
-            "min_utility_delta",
-            "max_score_drop",
-            "sft_max_steps",
-        ):
-            values.pop(legacy, None)
-        return cls(**values)
+        return cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
 
 
 @dataclass(slots=True)
@@ -66,9 +56,12 @@ class EvaluationReport:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvaluationReport:
-        values = dict(data)
-        values.pop("utility", None)
-        return cls(**values)
+        return cls(
+            task_score=float(data["task_score"]),
+            metrics=dict(data["metrics"]),
+            output_dir=str(data["output_dir"]),
+            log_path=str(data["log_path"]),
+        )
 
 
 @dataclass(slots=True)
@@ -76,28 +69,13 @@ class GenerationRecord:
     generation: int
     parent_commit: str
     resulting_commit: str | None
+    layer: str
     decision: str
-    outcome_type: str
+    outcome: str
     reason: str
-    changed_paths: list[str]
-    patch_path: str | None
-    diagnosis_path: str
-    diagnosed_layers: list[str]
-    plan_path: str
-    planned_layer: str
-    plan_hypothesis: str
     parent_report: dict[str, Any]
-    promotion_parent_report: dict[str, Any] | None
     candidate_report: dict[str, Any] | None
-    agent_stop_reason: str
-    agent_steps: int
-    input_tokens: int
-    output_tokens: int
-    causal_trace: dict[str, Any] = field(default_factory=dict)
-    evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
-    model_candidate: dict[str, Any] | None = None
-    context_candidate: dict[str, Any] | None = None
-    tool_candidate: dict[str, Any] | None = None
+    changed_paths: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

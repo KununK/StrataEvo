@@ -19,10 +19,8 @@ from tinyagent import (
     Agent,
     Model,
     OpenAICompatibleModel,
-    SessionStore,
     ToolRegistry,
     Workspace,
-    allow_all,
 )
 
 SYSTEM_PROMPT = """You are a coding agent being evaluated on one Python task.
@@ -45,7 +43,6 @@ class TaskRunner(Protocol):
         model: Model,
         candidate_path: Path,
         *,
-        session_dir: Path | None = None,
         max_steps: int = 12,
         test_timeout: float = 10.0,
         system_prompt: str = SYSTEM_PROMPT,
@@ -105,7 +102,6 @@ def run_agent_task(
     task_source: str,
     evaluate: Callable[[str, float], dict[str, Any]],
     benchmark: str,
-    session_dir: Path | None = None,
     max_steps: int = 12,
     test_timeout: float = 10.0,
     system_prompt: str = SYSTEM_PROMPT,
@@ -124,10 +120,6 @@ def run_agent_task(
             path = workspace / name
             path.write_text(content, encoding="utf-8")
             path.chmod(0o444)
-        session_id = safe_name(str(task["task_id"]))
-        session_store = SessionStore(session_dir) if session_dir else None
-        if session_dir:
-            (session_dir / f"{session_id}.json").unlink(missing_ok=True)
         tools = ToolRegistry(Workspace(workspace).tools()).with_description_addenda(
             tool_description_addenda or {}
         )
@@ -136,14 +128,9 @@ def run_agent_task(
             tools=tools,
             system_prompt=system_prompt,
             max_steps=max_steps,
-            approval=allow_all,
-            session_store=session_store,
         )
         try:
-            agent_result = agent.run(
-                user_prompt,
-                session_id=session_id if session_store else None,
-            )
+            agent_result = agent.run(user_prompt)
             agent_error = ""
         except Exception as error:
             agent_result = None
@@ -160,8 +147,6 @@ def run_agent_task(
         "task_id": task["task_id"],
         "entry_point": task.get("entry_point", ""),
         "prompt": task.get("prompt", ""),
-        "session_id": session_id,
-        "session_path": str(session_dir / f"{session_id}.json") if session_dir else None,
         "candidate_path": str(candidate_path) if source else None,
         "agent_output": agent_result.output if agent_result else "",
         "agent_error": agent_error,
@@ -213,9 +198,7 @@ def run_benchmark(
     if args.no_resume and output_dir.exists():
         shutil.rmtree(output_dir)
     candidates_dir = output_dir / "candidates"
-    sessions_dir = output_dir / "sessions"
     candidates_dir.mkdir(parents=True, exist_ok=True)
-    sessions_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(
         json.dumps({**vars(args), "benchmark": benchmark}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -259,7 +242,6 @@ def run_benchmark(
                     task,
                     model,
                     candidate,
-                    session_dir=sessions_dir,
                     max_steps=args.max_steps,
                     test_timeout=args.test_timeout,
                     system_prompt=system_prompt,

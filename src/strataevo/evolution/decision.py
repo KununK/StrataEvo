@@ -1,0 +1,167 @@
+"""Choose one evidence-grounded intervention for the next generation."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from tinyagent import Message, Model, OpenAICompatibleModel
+
+from .evidence import EvidenceBundle, TaskEvidence
+from .memory import EvolutionMemoryEntry, memory_context
+from .runtime.structured import request_json
+from .types import EvaluationReport, EvolutionConfig
+from .utils.io import write_json
+
+
+class EvolutionLayer(StrEnum):
+    MODEL = "model"
+    CONTEXT = "context"
+    TOOLS = "tools"
+    ARCHITECTURE = "architecture"
+
+
+@dataclass(slots=True)
+class EvolutionDecision:
+    layer: EvolutionLayer
+    evidence: list[str]
+    affected_tasks: list[str]
+    hypothesis: str
+    intervention: str
+    likely_files: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["layer"] = self.layer.value
+        return data
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        known_tasks: set[str],
+        config: EvolutionConfig,
+    ) -> EvolutionDecision:
+        layer = EvolutionLayer(str(data["layer"]))
+        if config.force_layer and layer.value != config.force_layer:
+            raise ValueError(f"decision must use forced layer {config.force_layer}")
+        if layer == EvolutionLayer.MODEL and not config.model_evolution:
+            raise ValueError("model evolution is disabled")
+
+        evidence = _strings(data.get("evidence"))
+        tasks = _strings(data.get("affected_tasks"))
+        hypothesis = str(data.get("hypothesis", "")).strip()
+        intervention = str(data.get("intervention", "")).strip()
+        if not evidence or not tasks or not hypothesis or not intervention:
+            raise ValueError(
+                "decision requires evidence, affected tasks, hypothesis, and intervention"
+            )
+        if not set(tasks) <= known_tasks:
+            raise ValueError("decision affected tasks must come from current evidence")
+
+        files = _strings(data.get("likely_files"))
+        if layer == EvolutionLayer.ARCHITECTURE:
+            if not files or any(not _is_mutable(path, config.mutable_paths) for path in files):
+                raise ValueError("architecture decision requires mutable likely_files")
+        elif files:
+            raise ValueError("only architecture decisions may name source files")
+        return cls(layer, evidence, tasks, hypothesis, intervention, files)
+
+
+SYSTEM_PROMPT = """Choose one evidence-grounded failure mechanism and one concrete intervention.
+Use only current-task evidence. Prior generations only show which interventions succeeded or
+failed. Select the closest layer: model weights, reusable context, model-facing tool descriptions,
+or agent architecture. Architecture may modify only src/tinyagent and must name likely files.
+Choose model only when model_evolution_enabled is true. Do not repeat a rejected intervention
+without new evidence. Return JSON:
+{"layer":"model|context|tools|architecture","evidence":["..."],
+"affected_tasks":["..."],"hypothesis":"...","intervention":"...","likely_files":[]}"""
+
+
+class EvolutionDecider:
+    def __init__(self, model: Model, max_cases: int = 40) -> None:
+        self.model = model
+        self.max_cases = max_cases
+
+    def decide(
+        self,
+        bundle: EvidenceBundle,
+        report: EvaluationReport,
+        history: list[EvolutionMemoryEntry],
+        config: EvolutionConfig,
+    ) -> EvolutionDecision:
+        cases = sorted(
+            bundle.cases,
+            key=lambda item: (item.passed, -len(item.signals), -item.steps),
+        )[: self.max_cases]
+        payload = {
+            "task_score": report.task_score,
+            "summary": bundle.summary,
+            "signals": bundle.signal_counts,
+            "cases": [_compact_case(case) for case in cases],
+            "prior_generations": memory_context(history),
+            "forced_layer": config.force_layer,
+            "model_evolution_enabled": config.model_evolution,
+            "mutable_paths": config.mutable_paths,
+        }
+        known_tasks = {case.task_id for case in cases}
+        return request_json(
+            self.model,
+            [Message("system", SYSTEM_PROMPT), Message("user", json.dumps(payload))],
+            lambda data: EvolutionDecision.from_dict(data, known_tasks, config),
+            label="evolution decision",
+            repair_retries=1,
+        ).value
+
+
+def decide_evolution(
+    config: EvolutionConfig,
+    report: EvaluationReport,
+    destination: str | Path,
+    history: list[EvolutionMemoryEntry],
+) -> EvolutionDecision:
+    evidence_path = Path(report.metrics["evidence_path"])
+    bundle = EvidenceBundle.from_dict(json.loads(evidence_path.read_text(encoding="utf-8")))
+    model = OpenAICompatibleModel(
+        model=config.model, base_url=config.base_url, temperature=0.0, timeout=300.0
+    )
+    decision = EvolutionDecider(model).decide(bundle, report, history, config)
+    write_json(destination, decision.to_dict())
+    return decision
+
+
+def _compact_case(case: TaskEvidence) -> dict[str, Any]:
+    return {
+        "task_id": case.task_id,
+        "passed": case.passed,
+        "status": case.status,
+        "stop_reason": case.stop_reason,
+        "signals": case.signals,
+        "error": case.error[:500],
+        "tool_events": [
+            {
+                "name": event.name,
+                "arguments": event.arguments,
+                "result": event.result[:300] if event.result else None,
+            }
+            for event in case.tool_events[:30]
+        ],
+    }
+
+
+def _strings(value: Any) -> list[str]:
+    return (
+        list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+        if isinstance(value, list)
+        else []
+    )
+
+
+def _is_mutable(path: str, roots: list[str]) -> bool:
+    clean = path.strip("/")
+    return any(
+        clean == root.strip("/") or clean.startswith(root.strip("/") + "/") for root in roots
+    )

@@ -24,7 +24,6 @@ class ProfileEvaluation:
     outcome_type: str
     reason: str
     candidate_report: EvaluationReport | None
-    promotion_parent_report: EvaluationReport | None
 
 
 @dataclass(slots=True)
@@ -92,8 +91,7 @@ def evolve_profile(
                     "attempt": attempt,
                     "outcome_type": "duplicate_candidate",
                     "reason": (
-                        f"{label} candidate repeats attempt "
-                        f"{seen_candidates[candidate_key]}"
+                        f"{label} candidate repeats attempt {seen_candidates[candidate_key]}"
                     ),
                     "candidate": candidate,
                 }
@@ -137,7 +135,6 @@ def evolve_profile(
                 "accepted",
                 f"candidate screening: {reason}",
                 screening,
-                None,
                 candidate_record,
                 input_tokens,
                 output_tokens,
@@ -152,7 +149,6 @@ def evolve_profile(
             "rejected",
             "no_change",
             f"{label} refinement produced no changed candidate",
-            None,
             None,
             normalized_parent,
             input_tokens,
@@ -173,11 +169,11 @@ def evolve_profile(
         "benchmark_rejected",
         f"best candidate screening: {reason}",
         screening,
-        None,
         candidate_record,
         input_tokens,
         output_tokens,
     )
+
 
 def evaluate_profile(
     parent_report: EvaluationReport,
@@ -199,14 +195,12 @@ def evaluate_profile(
                 "benchmark_rejected",
                 f"candidate screening: {reason}",
                 screening,
-                None,
             )
         return ProfileEvaluation(
             "accepted",
             "accepted",
             f"candidate screening: {reason}",
             screening,
-            None,
         )
     except BaseException:
         activate(parent)

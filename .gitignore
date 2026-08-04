@@ -10,3 +10,4 @@ dist/
 eval/logs/
 eval/outputs/
 evolution/runs/
+evolution/runs_old_*/

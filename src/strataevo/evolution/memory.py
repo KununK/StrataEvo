@@ -1,391 +1,77 @@
-"""Cross-generation memory for completed self-evolution attempts."""
+"""Minimal append-only memory for completed generations."""
 
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-from .core import causal, outcomes
-from .runtime.evaluation import promotion_observation
-from .types import EvaluationReport, GenerationRecord
-
-MemoryOutcome = outcomes.MemoryOutcome
-_causal_trace = causal.causal_trace
-_causal_trace_context = causal.causal_trace_context
-_executed_intervention = causal.executed_intervention
-_summarize_generation = outcomes.summarize_generation
-_summarize_outcome = outcomes.summarize_outcome
-_task_transitions = outcomes.task_transitions
-
-__all__ = [
-    "EvolutionMemory",
-    "EvolutionMemoryEntry",
-    "MemoryDiagnosis",
-    "MemoryOutcome",
-    "_causal_trace",
-    "_summarize_outcome",
-    "_task_transitions",
-    "memory_context",
-]
-
-if TYPE_CHECKING:
-    from .diagnosis import DiagnosisReport
-    from .plan import EvolutionPlanReport
-
-
-DEFAULT_MEMORY_CONTEXT_ENTRIES = 8
-PATCH_EXCERPT_CHARS = 3000
-TEXT_CONTEXT_CHARS = 500
-EVOLUTION_LAYERS = {"model", "context", "tools", "architecture"}
-
-
-@dataclass(slots=True)
-class MemoryDiagnosis:
-    primary_layer: str
-    related_layers: list[str]
-    problem: str
-    affected_tasks: list[str]
-    proposed_direction: str
-    confidence: float
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> MemoryDiagnosis:
-        diagnosis = cls(
-            primary_layer=str(data["primary_layer"]),
-            related_layers=_string_list(data.get("related_layers", []), "related_layers"),
-            problem=str(data["problem"]),
-            affected_tasks=_string_list(data.get("affected_tasks", []), "affected_tasks"),
-            proposed_direction=str(data["proposed_direction"]),
-            confidence=float(data["confidence"]),
-        )
-        unknown_layers = {diagnosis.primary_layer, *diagnosis.related_layers} - EVOLUTION_LAYERS
-        if unknown_layers:
-            raise ValueError(f"invalid memory evolution layers: {sorted(unknown_layers)}")
-        if not 0.0 <= diagnosis.confidence <= 1.0:
-            raise ValueError("memory diagnosis confidence must be between 0 and 1")
-        return diagnosis
+from typing import Any
 
 
 @dataclass(slots=True)
 class EvolutionMemoryEntry:
     generation: int
-    parent_commit: str
-    resulting_commit: str | None
+    layer: str
+    hypothesis: str
+    intervention: str
     decision: str
-    outcome_type: str
+    outcome: str
     reason: str
-    diagnoses: list[MemoryDiagnosis]
-    plan: dict[str, Any]
-    outcome_observations: list[dict[str, Any]]
-    changed_paths: list[str]
-    patch_path: str | None
-    patch_excerpt: str
-    agent_output: str
-    parent_task_score: float
-    candidate_task_score: float | None
-    causal_trace: dict[str, Any] = field(default_factory=dict)
-    evaluation_attempts: list[dict[str, Any]] = field(default_factory=list)
-    model_candidate: dict[str, Any] | None = None
-    context_candidate: dict[str, Any] | None = None
-    tool_candidate: dict[str, Any] | None = None
-    outcome: MemoryOutcome = field(
-        default_factory=lambda: MemoryOutcome(
-            status="not_evaluated",
-            score_delta=None,
-            fixed_tasks=[],
-            regressed_tasks=[],
-            remaining_failures=[],
-            summary="No outcome summary was recorded.",
-            next_step="Use the raw generation record before reusing this intervention.",
-        )
-    )
+    parent_score: float
+    candidate_score: float | None
+    changed_paths: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def to_context_dict(self) -> dict[str, Any]:
-        """Return the causal facts useful to a later model call."""
-        selected = _selected_diagnosis(self.diagnoses, self.plan)
-        return {
-            "generation": self.generation,
-            "decision": self.decision,
-            "outcome_type": self.outcome_type,
-            "reason": self.reason[:TEXT_CONTEXT_CHARS],
-            "selected_diagnosis": asdict(selected) if selected else None,
-            "action": {
-                "primary_layer": self.plan.get("primary_layer"),
-                "hypothesis": self.plan.get("hypothesis"),
-                "planned_intervention": self.plan.get("intervention"),
-                "executed_intervention": _executed_intervention(self),
-                "expected_outcomes": self.plan.get("expected_outcomes", []),
-            },
-            "causal_trace": _causal_trace_context(self.causal_trace),
-            "outcome": self.outcome.to_context_dict(),
-            "outcome_observations": self.outcome_observations,
-            "evaluation_attempts": [_attempt_context(item) for item in self.evaluation_attempts],
-        }
-
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvolutionMemoryEntry:
-        values = dict(data)
-        values["diagnoses"] = [
-            MemoryDiagnosis.from_dict(item) for item in values.get("diagnoses", [])
-        ]
-        values["plan"] = _object(values.get("plan", {}), "plan")
-        observations = values.get("outcome_observations", [])
-        if not isinstance(observations, list) or not all(
-            isinstance(item, dict) for item in observations
-        ):
-            raise ValueError("memory outcome_observations must be a list of objects")
-        values["outcome_observations"] = observations
-        values["changed_paths"] = _string_list(values.get("changed_paths", []), "changed_paths")
-        values.setdefault("patch_path", None)
-        values.setdefault("patch_excerpt", "")
-        values.setdefault(
-            "outcome_type", _legacy_outcome_type(values.get("decision"), values.get("reason"))
-        )
-        for legacy in ("parent_utility", "candidate_utility", "utility_delta"):
-            values.pop(legacy, None)
-        values.setdefault("evaluation_attempts", [])
-        values.setdefault("causal_trace", {})
-        values.setdefault("model_candidate", None)
-        values.setdefault("context_candidate", None)
-        values.setdefault("tool_candidate", None)
-        if not isinstance(values["evaluation_attempts"], list) or not all(
-            isinstance(item, dict) for item in values["evaluation_attempts"]
-        ):
-            raise ValueError("memory evaluation_attempts must be a list of objects")
-        raw_outcome = values.get("outcome")
-        values["outcome"] = (
-            MemoryOutcome.from_dict(raw_outcome, str(values["outcome_type"]))
-            if isinstance(raw_outcome, dict)
-            else _summarize_outcome(values)
-        )
-        entry = cls(**values)
-        if entry.generation <= 0:
-            raise ValueError("memory generation must be positive")
-        if entry.decision not in {"accepted", "rejected"}:
-            raise ValueError(f"invalid memory decision: {entry.decision}")
-        if entry.outcome_type not in {
-            "accepted",
-            "no_change",
-            "validation_failed",
-            "evaluation_failed",
-            "deferred_change",
-            "mixed_change_scope",
-            "unclassified_change",
-            "benchmark_rejected",
-            "model_training_skipped",
-            "semantic_noop",
-        }:
-            raise ValueError(f"invalid memory outcome type: {entry.outcome_type}")
-        return entry
-
-    @classmethod
-    def from_generation(
-        cls,
-        record: GenerationRecord,
-        diagnosis: DiagnosisReport,
-        plan_report: EvolutionPlanReport,
-        agent_output: str,
-    ) -> EvolutionMemoryEntry:
-        from .plan import observe_expected_outcomes
-
-        parent = record.promotion_parent_report or record.parent_report
-        candidate = record.candidate_report
-        patch_path = Path(record.patch_path) if record.patch_path else None
-        patch_excerpt = ""
-        if patch_path and patch_path.is_file():
-            patch_excerpt = patch_path.read_text(encoding="utf-8")[:PATCH_EXCERPT_CHARS]
-        outcome = _summarize_generation(record, parent, candidate)
-        entry = cls(
-            generation=record.generation,
-            parent_commit=record.parent_commit,
-            resulting_commit=record.resulting_commit,
-            decision=record.decision,
-            outcome_type=record.outcome_type,
-            reason=record.reason,
-            diagnoses=[MemoryDiagnosis.from_dict(item.to_dict()) for item in diagnosis.diagnoses],
-            plan=plan_report.plan.to_dict(),
-            outcome_observations=observe_expected_outcomes(
-                plan_report.plan, parent, record.candidate_report
+        return cls(
+            generation=int(data["generation"]),
+            layer=str(data["layer"]),
+            hypothesis=str(data["hypothesis"]),
+            intervention=str(data["intervention"]),
+            decision=str(data["decision"]),
+            outcome=str(data["outcome"]),
+            reason=str(data["reason"]),
+            parent_score=float(data["parent_score"]),
+            candidate_score=(
+                float(data["candidate_score"]) if data.get("candidate_score") is not None else None
             ),
-            changed_paths=list(record.changed_paths),
-            patch_path=record.patch_path,
-            patch_excerpt=patch_excerpt,
-            agent_output=agent_output.strip(),
-            parent_task_score=float(parent["task_score"]),
-            candidate_task_score=float(candidate["task_score"]) if candidate else None,
-            causal_trace={},
-            evaluation_attempts=list(record.evaluation_attempts),
-            model_candidate=record.model_candidate,
-            context_candidate=record.context_candidate,
-            tool_candidate=record.tool_candidate,
-            outcome=outcome,
+            changed_paths=[str(path) for path in data.get("changed_paths", [])],
         )
-        promotion = (
-            promotion_observation(
-                EvaluationReport.from_dict(record.parent_report),
-                EvaluationReport.from_dict(candidate),
-            )
-            if candidate
-            else None
-        )
-        entry.causal_trace = _causal_trace(entry, diagnosis, promotion)
-        return entry
+
+    def to_context_dict(self) -> dict[str, Any]:
+        return self.to_dict()
 
 
 class EvolutionMemory:
-    """Persist one auditable entry for every completed generation."""
-
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
     def load(self) -> list[EvolutionMemoryEntry]:
-        if not self.path.exists():
+        if not self.path.is_file():
             return []
-        entries: list[EvolutionMemoryEntry] = []
-        generations: set[int] = set()
-        for line_number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
-            if not line.strip():
-                continue
-            try:
-                data = json.loads(line)
-                if not isinstance(data, dict):
-                    raise ValueError("entry must be an object")
-                entry = EvolutionMemoryEntry.from_dict(data)
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-                raise ValueError(f"invalid evolution memory line {line_number}: {error}") from error
-            if entry.generation in generations:
-                raise ValueError(f"duplicate evolution memory generation: {entry.generation}")
-            generations.add(entry.generation)
-            entries.append(entry)
-        return sorted(entries, key=lambda item: item.generation)
+        return [
+            EvolutionMemoryEntry.from_dict(json.loads(line))
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     def append(self, entry: EvolutionMemoryEntry) -> None:
-        entries = self.load()
-        existing = next((item for item in entries if item.generation == entry.generation), None)
-        if existing:
-            if existing != entry:
-                raise ValueError(f"conflicting evolution memory generation: {entry.generation}")
-            return
-        entries.append(entry)
-        self._write(entries)
+        if any(item.generation == entry.generation for item in self.load()):
+            raise ValueError(f"memory already contains generation {entry.generation}")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
 
-    def latest(self, limit: int = DEFAULT_MEMORY_CONTEXT_ENTRIES) -> list[EvolutionMemoryEntry]:
-        _validate_limit(limit)
+    def latest(self, limit: int = 5) -> list[EvolutionMemoryEntry]:
         return self.load()[-limit:]
 
-    def relevant(
-        self,
-        layers: set[str],
-        limit: int = DEFAULT_MEMORY_CONTEXT_ENTRIES,
-    ) -> list[EvolutionMemoryEntry]:
-        _validate_limit(limit)
-        entries = self.load()
-        matching = [
-            entry
-            for entry in entries
-            if bool(layers.intersection(_entry_layers(entry)))
-        ]
-        selected = matching[-limit:]
-        if len(selected) < limit:
-            selected_generations = {entry.generation for entry in selected}
-            fallback = [entry for entry in entries if entry.generation not in selected_generations][
-                -(limit - len(selected)) :
-            ]
-            selected = [*fallback, *selected]
-        return sorted(selected, key=lambda item: item.generation)
-
-    def _write(self, entries: list[EvolutionMemoryEntry]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        content = "".join(
-            json.dumps(entry.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
-            for entry in sorted(entries, key=lambda item: item.generation)
-        )
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(self.path)
+    def relevant(self, layers: set[str], limit: int = 5) -> list[EvolutionMemoryEntry]:
+        matching = [entry for entry in self.load() if entry.layer in layers]
+        return matching[-limit:]
 
 
-def memory_context(
-    entries: list[EvolutionMemoryEntry],
-    max_chars: int | None = None,
-) -> list[dict[str, Any]]:
-    items = [entry.to_context_dict() for entry in entries]
-    if max_chars is None:
-        return items
-    if max_chars <= 0:
-        raise ValueError("memory context max_chars must be positive")
-    selected: list[dict[str, Any]] = []
-    size = 2
-    for item in reversed(items):
-        item_size = len(json.dumps(item, ensure_ascii=False)) + 1
-        if size + item_size > max_chars:
-            continue
-        selected.append(item)
-        size += item_size
-    return list(reversed(selected))
-
-
-def _string_list(value: Any, field_name: str) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"memory {field_name} must be a list of strings")
-    return list(dict.fromkeys(value))
-
-
-def _object(value: Any, field_name: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError(f"memory {field_name} must be an object")
-    return value
-
-
-def _attempt_context(attempt: dict[str, Any]) -> dict[str, Any]:
-    report = attempt.get("report")
-    return {
-        "number": attempt.get("number"),
-        "outcome_type": attempt.get("outcome_type"),
-        "reason": str(attempt.get("reason", ""))[:250],
-        "changed_paths": attempt.get("changed_paths", []),
-        "task_score": report.get("task_score") if isinstance(report, dict) else None,
-    }
-
-
-def _selected_diagnosis(
-    diagnoses: list[MemoryDiagnosis],
-    plan: dict[str, Any],
-) -> MemoryDiagnosis | None:
-    target = plan.get("target_diagnosis")
-    if isinstance(target, int) and 0 <= target < len(diagnoses):
-        return diagnoses[target]
-    return diagnoses[0] if diagnoses else None
-
-
-def _entry_layers(entry: EvolutionMemoryEntry) -> set[str]:
-    layers = {
-        layer
-        for diagnosis in entry.diagnoses
-        for layer in [diagnosis.primary_layer, *diagnosis.related_layers]
-    }
-    planned = entry.plan.get("primary_layer")
-    if isinstance(planned, str):
-        layers.add(planned)
-    return layers
-
-
-def _validate_limit(limit: int) -> None:
-    if limit <= 0:
-        raise ValueError("memory context limit must be positive")
-
-
-def _legacy_outcome_type(decision: Any, reason: Any) -> str:
-    if decision == "accepted":
-        return "accepted"
-    text = str(reason or "")
-    if "no source changes" in text:
-        return "no_change"
-    if "validation" in text:
-        return "validation_failed"
-    return "benchmark_rejected"
+def memory_context(entries: list[EvolutionMemoryEntry]) -> list[dict[str, Any]]:
+    return [entry.to_context_dict() for entry in entries]

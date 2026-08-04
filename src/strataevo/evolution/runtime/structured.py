@@ -1,4 +1,4 @@
-"""Validated JSON model calls shared by diagnosis and planning."""
+"""Validated JSON model calls used by evolution controllers."""
 
 from __future__ import annotations
 

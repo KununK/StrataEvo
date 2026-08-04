@@ -42,14 +42,11 @@ class HumanEvalTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / "candidate.py"
-            sessions = Path(directory) / "sessions"
-            generation, result = run_agent_task(TASK, model, candidate, session_dir=sessions)
+            generation, result = run_agent_task(TASK, model, candidate)
             self.assertTrue(result["passed"])
             self.assertEqual(result["agent_steps"], 2)
             self.assertEqual(candidate.read_text(encoding="utf-8"), source)
             self.assertEqual(generation["stop_reason"], "completed")
-            self.assertEqual(generation["session_id"], "HumanEval_0")
-            self.assertTrue((sessions / "HumanEval_0.json").is_file())
 
 
 if __name__ == "__main__":

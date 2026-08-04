@@ -10,24 +10,19 @@ from tinyagent import (
     Agent,
     AgentResult,
     OpenAICompatibleModel,
-    SessionStore,
     ToolRegistry,
     Usage,
-    allow_all,
 )
 
-from .diagnosis import DiagnosisReport
+from .decision import EvolutionDecision
 from .memory import EvolutionMemoryEntry, memory_context
-from .plan import EvolutionPlanReport
-from .runtime.contract import EvaluationContract
 from .runtime.workspace import SelfWorkspace
 from .types import EvaluationReport, EvolutionConfig
 
-SYSTEM_PROMPT = """You are StrataEvo, a self-improving software agent.
-Improve the task-solving Agent measured by the active evaluation contract. Inspect the repository
-and evaluation evidence, identify one concrete limitation, and make one coherent improvement.
-The evaluator and tests are a read-only external environment. Never weaken them or fabricate
-results. Keep interfaces compatible, run validation, and stop after producing a focused diff."""
+SYSTEM_PROMPT = """You improve a task-solving Agent by testing the supplied EvolutionDecision.
+Inspect its evidence and the relevant code, implement one focused intervention, evaluate it, and
+refine that intervention from measured feedback. The evaluator and tests are read-only: never
+weaken the task or fabricate results. Stop when no evidence-based improvement remains."""
 
 MUTATOR_CONTEXT_LIMIT_CHARS = 60_000
 
@@ -37,12 +32,9 @@ def mutate(
     config: EvolutionConfig,
     generation: int,
     parent_report: EvaluationReport,
-    diagnosis: DiagnosisReport,
-    plan_report: EvolutionPlanReport,
+    decision: EvolutionDecision,
     history: list[EvolutionMemoryEntry],
-    generation_dir: Path,
     commands: list[list[str]],
-    evaluation_contract: EvaluationContract,
     evaluate_candidate: Callable[[], str],
 ) -> AgentResult:
     print(f"[evolution] generation {generation}: inspecting and rewriting self", flush=True)
@@ -64,65 +56,38 @@ def mutate(
         system_prompt=SYSTEM_PROMPT,
         max_steps=config.mutator_max_steps,
         context_limit_chars=MUTATOR_CONTEXT_LIMIT_CHARS,
-        approval=allow_all,
-        session_store=SessionStore(generation_dir / "sessions"),
     )
-    feedback = json.dumps(parent_report.to_dict(), indent=2, ensure_ascii=False)
-    selected_diagnosis = diagnosis.diagnoses[plan_report.plan.target_diagnosis]
-    diagnosed_problem = json.dumps(selected_diagnosis.to_dict(), indent=2, ensure_ascii=False)
-    evolution_plan = json.dumps(plan_report.plan.to_dict(), indent=2, ensure_ascii=False)
-    prior_evolution = json.dumps(
-        memory_context(history, max_chars=12_000),
+    parent = json.dumps(
+        {
+            "task_score": parent_report.task_score,
+            "evidence_path": parent_report.metrics.get("evidence_path"),
+            "output_dir": parent_report.output_dir,
+        },
         indent=2,
         ensure_ascii=False,
     )
+    evolution_decision = json.dumps(decision.to_dict(), indent=2, ensure_ascii=False)
+    prior_evolution = json.dumps(memory_context(history), indent=2, ensure_ascii=False)
     mutable_paths = json.dumps(config.mutable_paths, ensure_ascii=False)
-    contract = json.dumps(evaluation_contract.to_dict(), indent=2, ensure_ascii=False)
-    prompt = f"""Create generation {generation} by improving your own implementation.
+    prompt = f"""Implement generation {generation}.
 
-Current evaluation report:
-{feedback}
+Parent evaluation:
+{parent}
 
-Detailed trajectories and results are stored under:
-{parent_report.output_dir}
-
-Selected diagnosis:
-{diagnosed_problem}
-
-Evolution plan:
-{evolution_plan}
-
-Active evaluation contract:
-{contract}
+Evolution decision:
+{evolution_decision}
 
 Relevant prior evolution outcomes:
 {prior_evolution}
 
-Execution constraints:
-- Writable paths: {mutable_paths}
-- Only a patch confined to evaluation_contract.direct_paths can be scored by this benchmark.
-  deferred_paths remain inspectable and writable for future research, but changing them now is not
-  evidence of task-Agent improvement. Do not mix direct and deferred changes in one candidate.
-- Total model/tool steps available: {config.mutator_max_steps}
-- Refinement rounds available: {config.mutator_rounds}
-- Candidate benchmark evaluations available: {config.max_eval_attempts}
-- Start the source edit within the first third of the budget.
-- Work on one candidate until the current round ends. The controller will then validate and
-  evaluate the current diff and return the result in this same session. You may also call
-  evaluate_candidate yourself when ready; repeated evaluation of an unchanged patch is cached.
-- Reserve enough steps for show_diff, evaluation feedback, and repairs.
-- Prefer the smallest direct change. Do not add a new subsystem when an existing prompt, tool,
-  schema, or control-flow check can address the evidence.
-- replace_text requires an exact match. After one mismatch, read the relevant lines and use
-  replace_lines instead of repeatedly guessing whitespace.
+Boundaries:
+- Modify only {mutable_paths}.
+- Make the smallest coherent change that directly tests the decision's hypothesis and intervention.
+- Inspect the referenced evidence before editing and stay on the selected failure mechanism.
+- Use evaluate_candidate when the candidate is executable, then revise from its feedback.
+- The controller retains the best evaluated improvement and otherwise restores the parent.
 
-Read the relevant implementation and evidence before editing. Execute one focused intervention
-consistent with the plan. Treat the hypothesis as testable, verify its evidence against the
-referenced trajectories, and use prior outcomes to avoid repeating an unchanged rejected approach.
-likely_files are guidance rather than a permission boundary. Do not silently switch to another
-diagnosis or bundle unrelated improvements. evaluate_candidate runs the fixed validation commands
-before the benchmark. Your changes remain on disk while you refine them; the external controller
-will restore the best evaluated candidate and either commit or roll it back."""
+Candidate benchmark evaluations available: {config.max_eval_attempts}."""
     return _run_refinement_session(agent, prompt, evaluate_candidate, config)
 
 
@@ -132,17 +97,18 @@ def _run_refinement_session(
     evaluate_candidate: Callable[[], str],
     config: EvolutionConfig,
 ) -> AgentResult:
-    session_id = "generation-refinement"
     remaining_steps = config.mutator_max_steps
     total_steps = 0
     total_usage = Usage()
     latest: AgentResult | None = None
     prompt = initial_prompt
+    history = None
 
     for round_number in range(1, config.mutator_rounds + 1):
         rounds_left = config.mutator_rounds - round_number + 1
         agent.max_steps = _round_step_budget(remaining_steps, rounds_left)
-        latest = agent.run(prompt, session_id=session_id)
+        latest = agent.run(prompt, history=history)
+        history = latest.messages
         total_steps += latest.steps
         total_usage = total_usage + latest.usage
         remaining_steps -= latest.steps
@@ -155,22 +121,19 @@ def _run_refinement_session(
         if data.get("evaluations_remaining") == 0 or remaining_steps <= 0:
             stop_reason = "max_steps" if remaining_steps <= 0 else "evaluation_limit"
             break
-        if latest.output.strip().upper() == "FINALIZE" and data.get("outcome_type") in {
+        if latest.output.strip().upper() == "FINALIZE" and data.get("outcome") in {
             "evaluated",
             "no_change",
         }:
             stop_reason = "completed"
             break
 
-        prompt = f"""Candidate evaluation feedback for refinement round {round_number}:
+        prompt = f"""Evaluation feedback for refinement round {round_number}:
 {feedback}
 
-Continue from the current working tree. Fix validation errors before changing direction. If the
-candidate was benchmarked, inspect its evidence before deciding the next edit. Make a coherent
-revision that responds to this feedback. If no further justified improvement remains, do not edit
-and answer exactly FINALIZE. Treat working_tree_state as authoritative: when candidate_retained is
-false, the submitted patch has been discarded and its validation result does not describe the
-currently active code."""
+Treat the current files as authoritative. Repair validation errors or revise the same intervention
+using this feedback and its evidence. Evaluate again when executable. If no justified revision
+remains, do not edit and answer exactly FINALIZE."""
     else:
         stop_reason = "round_limit"
 

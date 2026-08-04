@@ -52,7 +52,6 @@ eval/outputs/humaneval/<run_name>/
 ├── generations.jsonl # Agent 输出、工具轨迹、token 和步数
 ├── results.jsonl     # 每题判题结果
 ├── evidence.json    # 自进化使用的结构化任务证据
-├── sessions/         # 每道题独立的 Tinyagent session
 └── summary.json      # pass@1 和状态统计
 ```
 

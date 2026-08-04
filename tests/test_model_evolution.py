@@ -6,11 +6,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from strataevo.evolution.diagnosis import Diagnosis, EvolutionLayer
+from strataevo.evolution.decision import EvolutionDecision, EvolutionLayer
 from strataevo.evolution.layers.model.evolution import (
     build_training_dataset,
     evolve_model,
-    task_changes,
 )
 from strataevo.evolution.layers.model.repair import (
     RepairCollection,
@@ -18,7 +17,7 @@ from strataevo.evolution.layers.model.repair import (
     collect_failed_task_repairs,
 )
 from strataevo.evolution.layers.model.sft import _chat_ids
-from strataevo.evolution.plan import EvolutionPlan, ExpectedOutcome, MetricDirection
+from strataevo.evolution.layers.profile import task_changes
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ScriptedModel, ToolCall
 
@@ -109,7 +108,7 @@ class ModelEvolutionTests(unittest.TestCase):
             reports = [EvaluationReport(0.6, {}, "", "screening.log")]
             evaluator = FakeEvaluator(reports)
             runtime = FakeRuntime()
-            diagnosis, plan = self._model_direction()
+            decision = self._model_decision()
 
             repairs = RepairCollection(
                 failed_tasks=["failed"],
@@ -147,37 +146,17 @@ class ModelEvolutionTests(unittest.TestCase):
                         "path": str(root / "parent-adapter"),
                     },
                     runtime=runtime,
-                    diagnosis=diagnosis,
-                    plan=plan,
+                    decision=decision,
                 )
 
             self.assertEqual(result.decision, "accepted")
             self.assertEqual(result.candidate_report.task_score, 0.6)
-            self.assertIsNone(result.promotion_parent_report)
             self.assertEqual(result.candidate["training_examples"], 2)
-            self.assertEqual(
-                result.candidate["repair_collection"]["repaired_tasks"],
-                ["failed"],
-            )
             self.assertEqual(evaluator.models[-1], result.candidate["name"])
             self.assertEqual(runtime.events[-1][0], "activate")
             self.assertEqual(runtime.events[0], ("deactivate", "parent-adapter"))
-            self.assertEqual(
-                result.candidate["planned_intervention"]["affected_tasks"],
-                ["failed"],
-            )
-            self.assertEqual(
-                result.candidate["executed_intervention"]["targeted_tasks"],
-                ["failed"],
-            )
-            self.assertEqual(
-                result.candidate["executed_intervention"]["training"]["epochs"],
-                1,
-            )
             train_config = json.loads(
-                (
-                    root / "generation-0001/model/train_config.json"
-                ).read_text(encoding="utf-8")
+                (root / "generation-0001/model/train_config.json").read_text(encoding="utf-8")
             )
             self.assertEqual(train_config["epochs"], 1)
             self.assertNotIn("max_steps", train_config)
@@ -219,16 +198,13 @@ class ModelEvolutionTests(unittest.TestCase):
                     },
                 ],
             )
-            collection = RepairCollection(
-                ["failed"], ["failed"], [], 2, 2, str(repairs_dir)
-            )
+            collection = RepairCollection(["failed"], ["failed"], [], 2, 2, str(repairs_dir))
             destination = root / "training.jsonl"
 
             summary = build_training_dataset(parent, collection, destination, limit=2)
 
             rows = [
-                json.loads(line)
-                for line in destination.read_text(encoding="utf-8").splitlines()
+                json.loads(line) for line in destination.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual([row["source"] for row in rows], ["repair", "replay"])
             self.assertEqual(summary["trained_repair_tasks"], ["failed"])
@@ -391,34 +367,15 @@ class ModelEvolutionTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _model_direction():
-        diagnosis = Diagnosis(
-            primary_layer=EvolutionLayer.MODEL,
-            related_layers=[],
-            problem="The model violates the requested function contract.",
-            evidence=["failed did not satisfy the verifier"],
-            affected_tasks=["failed"],
-            proposed_direction="Improve contract-aware reasoning.",
-            confidence=0.8,
+    def _model_decision():
+        return EvolutionDecision(
+            EvolutionLayer.MODEL,
+            ["failed did not satisfy the verifier"],
+            ["failed"],
+            "Contract-aware repair trajectories improve task success.",
+            "Train on verified repairs for the affected failed tasks.",
+            [],
         )
-        plan = EvolutionPlan(
-            target_diagnosis=0,
-            primary_layer=EvolutionLayer.MODEL,
-            hypothesis="Contract-aware repair trajectories improve task success.",
-            intervention="Train on verified repairs for the affected failed tasks.",
-            expected_outcomes=[
-                ExpectedOutcome(
-                    "task_score",
-                    MetricDirection.INCREASE,
-                    "The selected failures should be repaired.",
-                )
-            ],
-            likely_files=[],
-            expected_long_term_value="Improve related coding tasks.",
-            prerequisites=[],
-            confidence=0.8,
-        )
-        return diagnosis, plan
 
 
 if __name__ == "__main__":

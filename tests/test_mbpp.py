@@ -47,13 +47,10 @@ class MBPPTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / "candidate.py"
-            sessions = Path(directory) / "sessions"
-            generation, result = run_agent_task(TASK, model, candidate, session_dir=sessions)
+            generation, result = run_agent_task(TASK, model, candidate)
 
             self.assertTrue(result["passed"])
-            self.assertEqual(generation["session_id"], "11")
             self.assertEqual(candidate.read_text(encoding="utf-8"), source)
-            self.assertTrue((sessions / "11.json").is_file())
 
     def test_local_dataset_is_normalized(self):
         row = {

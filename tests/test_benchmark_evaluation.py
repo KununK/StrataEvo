@@ -18,7 +18,7 @@ class BenchmarkEvaluationTests(unittest.TestCase):
                 evaluator = create_evaluator(root, config)
 
                 self.assertIsInstance(evaluator, BenchmarkEvaluator)
-                self.assertEqual(evaluator.contract.benchmark, display_name)
+                self.assertEqual(evaluator.spec.display_name, display_name)
                 self.assertEqual(evaluator.spec.module, module)
 
     def test_registry_rejects_unknown_benchmark(self):

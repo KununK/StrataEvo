@@ -4,24 +4,13 @@ import unittest
 from pathlib import Path
 
 from eval.coding_agent import load_tool_profile
-from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
+from strataevo.evolution.decision import EvolutionDecision, EvolutionLayer
 from strataevo.evolution.layers.tools import ToolEvolver, ToolProfile, evolve_tools
-from strataevo.evolution.plan import (
-    EvolutionPlan,
-    EvolutionPlanReport,
-    ExpectedOutcome,
-    MetricDirection,
-)
-from strataevo.evolution.runtime.contract import EvaluationContract
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 
-CONTRACT = EvaluationContract("test", "improve score", ("src/tinyagent",), ())
-
 
 class FakeEvaluator:
-    contract = CONTRACT
-
     def __init__(self, scores):
         self.scores = iter(scores)
         self.profiles = []
@@ -55,10 +44,8 @@ class ToolEvolutionTests(unittest.TestCase):
         profile, metadata = ToolEvolver(model).create_candidate(
             ToolProfile({}),
             {"read_file": "Read a file."},
-            self._diagnosis(),
-            self._plan(),
+            self._decision(),
             [],
-            CONTRACT,
         )
         self.assertIn("read_file", profile.description_addenda)
         self.assertEqual(metadata["input_tokens"], 20)
@@ -77,8 +64,7 @@ class ToolEvolutionTests(unittest.TestCase):
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_profile=None,
                 model_name="test-model",
@@ -100,8 +86,7 @@ class ToolEvolutionTests(unittest.TestCase):
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_profile=parent,
                 model_name="test-model",
@@ -115,9 +100,7 @@ class ToolEvolutionTests(unittest.TestCase):
             [
                 Message(
                     "assistant",
-                    json.dumps(
-                        {"description_addenda": {"read_file": "Read every file first."}}
-                    ),
+                    json.dumps({"description_addenda": {"read_file": "Read every file first."}}),
                 ),
                 Message(
                     "assistant",
@@ -136,8 +119,7 @@ class ToolEvolutionTests(unittest.TestCase):
                 generation_dir,
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_profile=None,
                 model_name="test-model",
@@ -170,52 +152,14 @@ class ToolEvolutionTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _diagnosis():
-        return DiagnosisReport(
-            source_dir="parent",
-            input_case_count=1,
-            diagnoses=[
-                Diagnosis(
-                    primary_layer=EvolutionLayer.TOOLS,
-                    related_layers=[],
-                    problem="The agent edits before reading evidence.",
-                    evidence=["The first call was write_file."],
-                    affected_tasks=["task/1"],
-                    proposed_direction="Clarify read-before-write sequencing.",
-                    confidence=0.8,
-                )
-            ],
-            input_tokens=0,
-            output_tokens=0,
-            raw_output="{}",
-            attempts=["{}"],
-        )
-
-    @staticmethod
-    def _plan():
-        return EvolutionPlanReport(
-            plan=EvolutionPlan(
-                target_diagnosis=0,
-                primary_layer=EvolutionLayer.TOOLS,
-                hypothesis="Clearer guidance will improve evidence use.",
-                intervention="Append concise sequencing guidance.",
-                expected_outcomes=[
-                    ExpectedOutcome(
-                        "task_score",
-                        MetricDirection.INCREASE,
-                        "Better evidence use should solve more tasks.",
-                    )
-                ],
-                likely_files=[],
-                expected_long_term_value="Reusable tool guidance.",
-                prerequisites=[],
-                confidence=0.8,
-            ),
-            available_metrics={"task_score": 0.5},
-            input_tokens=0,
-            output_tokens=0,
-            raw_output="{}",
-            attempts=["{}"],
+    def _decision():
+        return EvolutionDecision(
+            EvolutionLayer.TOOLS,
+            ["The first call was write_file."],
+            ["task/1"],
+            "Clearer guidance will improve evidence use.",
+            "Append concise sequencing guidance.",
+            [],
         )
 
 

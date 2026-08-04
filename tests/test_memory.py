@@ -1,330 +1,45 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
-from strataevo.evolution.memory import (
-    EvolutionMemory,
-    EvolutionMemoryEntry,
-    MemoryDiagnosis,
-    MemoryOutcome,
-    _causal_trace,
-    _summarize_outcome,
-    _task_transitions,
-    memory_context,
-)
+from strataevo.evolution.memory import EvolutionMemory, EvolutionMemoryEntry
 
 
-class EvolutionMemoryTests(unittest.TestCase):
-    def test_append_is_persistent_and_idempotent(self):
+class MemoryTests(unittest.TestCase):
+    def test_memory_is_append_only_and_selects_relevant_layers(self):
         with tempfile.TemporaryDirectory() as directory:
-            memory = EvolutionMemory(Path(directory) / "evolution_memory.jsonl")
-            entry = self._entry(1, "context", "rejected")
-
-            memory.append(entry)
-            memory.append(entry)
-
-            self.assertEqual(memory.load(), [entry])
-            self.assertEqual(len(memory.path.read_text(encoding="utf-8").splitlines()), 1)
-
-    def test_conflicting_generation_is_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            memory = EvolutionMemory(Path(directory) / "evolution_memory.jsonl")
-            memory.append(self._entry(1, "context", "rejected"))
-
-            with self.assertRaisesRegex(ValueError, "conflicting"):
-                memory.append(self._entry(1, "context", "accepted"))
-
-    def test_relevant_history_prioritizes_matching_layers(self):
-        with tempfile.TemporaryDirectory() as directory:
-            memory = EvolutionMemory(Path(directory) / "evolution_memory.jsonl")
-            memory.append(self._entry(1, "tools", "rejected"))
-            memory.append(self._entry(2, "context", "accepted"))
-            memory.append(self._entry(3, "architecture", "rejected", related=["tools"]))
-
-            selected = memory.relevant({"tools"}, limit=2)
-
-            self.assertEqual([entry.generation for entry in selected], [1, 3])
-
-    def test_contract_mismatches_remain_loadable_evidence(self):
-        for outcome in (
-            "deferred_change",
-            "mixed_change_scope",
-            "unclassified_change",
-        ):
-            with self.subTest(outcome=outcome):
-                data = self._entry(1, "architecture", "rejected").to_dict()
-                data["outcome_type"] = outcome
-
-                loaded = EvolutionMemoryEntry.from_dict(data)
-
-                self.assertEqual(loaded.outcome_type, outcome)
-
-    def test_memory_context_budget_keeps_the_newest_entries(self):
-        entries = [self._entry(number, "context", "rejected") for number in range(1, 4)]
-        newest_size = len(json.dumps(entries[-1].to_context_dict())) + 3
-
-        context = memory_context(entries, max_chars=newest_size)
-
-        self.assertEqual([item["generation"] for item in context], [3])
-
-    def test_large_failure_trace_does_not_hide_the_memory_entry(self):
-        entry = self._entry(1, "architecture", "rejected")
-        entry.reason = "traceback " * 3000
-        entry.outcome.summary = "validation traceback " * 3000
-
-        context = memory_context([entry], max_chars=12_000)
-
-        self.assertEqual([item["generation"] for item in context], [1])
-        self.assertLessEqual(len(context[0]["reason"]), 500)
-        self.assertLessEqual(len(context[0]["outcome"]["summary"]), 500)
-
-    def test_context_exposes_problem_action_and_outcome(self):
-        entry = self._entry(1, "tools", "rejected")
-        entry.outcome = MemoryOutcome(
-            status="regressed",
-            score_delta=-0.1,
-            fixed_tasks=["task/1"],
-            regressed_tasks=["task/2"],
-            remaining_failures=[f"task/{number}" for number in range(20)],
-            summary="The intervention regressed.",
-            next_step="Revise the hypothesis.",
-        )
-
-        context = entry.to_context_dict()
-
-        self.assertEqual(context["selected_diagnosis"]["problem"], "test problem")
-        self.assertEqual(context["action"]["primary_layer"], "tools")
-        self.assertEqual(context["outcome"]["status"], "regressed")
-        self.assertEqual(context["outcome"]["hypothesis_verdict"], "untested")
-        self.assertEqual(context["outcome"]["remaining_failures"]["count"], 20)
-        self.assertEqual(len(context["outcome"]["remaining_failures"]["examples"]), 12)
-        self.assertNotIn("agent_output", context)
-        self.assertEqual(context["causal_trace"], {})
-
-    def test_legacy_entry_defaults_to_empty_causal_trace(self):
-        data = self._entry(1, "context", "rejected").to_dict()
-        data.pop("causal_trace")
-
-        loaded = EvolutionMemoryEntry.from_dict(data)
-
-        self.assertEqual(loaded.causal_trace, {})
-
-    def test_causal_trace_maps_all_candidate_types_to_layers(self):
-        diagnosis = SimpleNamespace(
-            diagnoses=[SimpleNamespace(evidence=["event"], problem="mechanism")]
-        )
-        candidates = {
-            "architecture": {},
-            "context": {"context_candidate": {"system_prompt_addendum": "guide"}},
-            "tools": {"tool_candidate": {"description_addenda": {"read_file": "guide"}}},
-            "model": {"model_candidate": {"executed_intervention": {}}},
-        }
-
-        for layer, values in candidates.items():
-            with self.subTest(layer=layer):
-                entry = self._entry(1, layer, "rejected")
-                if layer != "architecture":
-                    entry.changed_paths = []
-                for name, value in values.items():
-                    setattr(entry, name, value)
-
-                trace = _causal_trace(entry, diagnosis)
-
-                self.assertEqual(trace["selected_layer"], layer)
-                self.assertEqual(trace["alignment"]["status"], "layer_aligned")
-
-    def test_rejected_benchmark_records_explicit_counterevidence(self):
-        entry = self._entry(1, "architecture", "rejected")
-        entry.outcome = MemoryOutcome(
-            status="regressed",
-            score_delta=-0.1,
-            fixed_tasks=[],
-            regressed_tasks=["task/2"],
-            remaining_failures=["task/1"],
-            summary="The intervention regressed.",
-            next_step="Revise the hypothesis.",
-            hypothesis_verdict="refuted",
-            counterevidence=["Candidate task-score delta was -0.100000."],
-        )
-
-        outcome = entry.to_context_dict()["outcome"]
-
-        self.assertEqual(outcome["hypothesis_verdict"], "refuted")
-        self.assertEqual(
-            outcome["counterevidence"],
-            ["Candidate task-score delta was -0.100000."],
-        )
-
-    def test_context_preserves_model_repair_and_task_changes(self):
-        entry = self._entry(1, "model", "rejected")
-        entry.model_candidate = {
-            "planned_intervention": {
-                "hypothesis": "repair contract failures",
-                "intervention": "train on selected verified repairs",
-            },
-            "executed_intervention": {
-                "targeted_tasks": ["task/fixed"],
-                "repaired_tasks": ["task/fixed"],
-            },
-            "repair_collection": {
-                "repaired_tasks": ["task/fixed"],
-                "still_failed_tasks": ["task/failed"],
-            },
-            "screening_task_changes": {
-                "fixed_tasks": ["task/fixed"],
-                "regressed_tasks": ["task/regressed"],
-                "still_failed_tasks": ["task/failed"],
-            },
-        }
-
-        candidate = entry.to_context_dict()["action"]["executed_intervention"]
-
-        self.assertEqual(candidate["type"], "model_adapter")
-        self.assertEqual(candidate["targeted_tasks"], ["task/fixed"])
-        self.assertEqual(candidate["repaired_tasks"], ["task/fixed"])
-
-    def test_old_entry_derives_outcome_summary(self):
-        data = self._entry(1, "context", "rejected").to_dict()
-        data.pop("outcome")
-        data["parent_task_score"] = 0.6
-        data["candidate_task_score"] = 0.5
-
-        loaded = EvolutionMemoryEntry.from_dict(data)
-
-        self.assertEqual(loaded.outcome.status, "regressed")
-        self.assertAlmostEqual(loaded.outcome.score_delta or 0.0, -0.1)
-
-    def test_legacy_outcome_derives_hypothesis_verdict(self):
-        data = self._entry(1, "architecture", "rejected").to_dict()
-        data["outcome"] = {
-            "status": "regressed",
-            "score_delta": -0.1,
-            "fixed_tasks": [],
-            "regressed_tasks": [],
-            "remaining_failures": [],
-            "summary": "The intervention regressed.",
-            "next_step": "Revise it.",
-        }
-
-        loaded = EvolutionMemoryEntry.from_dict(data)
-
-        self.assertEqual(loaded.outcome.hypothesis_verdict, "refuted")
-        self.assertEqual(
-            loaded.outcome.counterevidence,
-            ["The intervention regressed."],
-        )
-        self.assertEqual(loaded.outcome.intervention_verdict, "ineffective")
-
-    def test_validation_failure_rejects_intervention_but_keeps_hypothesis_open(self):
-        data = self._entry(1, "architecture", "rejected").to_dict()
-        data["outcome_type"] = "validation_failed"
-        data["outcome"] = {
-            "status": "not_evaluated",
-            "score_delta": None,
-            "fixed_tasks": [],
-            "regressed_tasks": [],
-            "remaining_failures": [],
-            "summary": "The candidate failed validation.",
-            "next_step": "Try another implementation.",
-            "hypothesis_verdict": "untested",
-            "counterevidence": [],
-        }
-
-        outcome = EvolutionMemoryEntry.from_dict(data).outcome
-
-        self.assertEqual(outcome.hypothesis_verdict, "untested")
-        self.assertEqual(outcome.intervention_verdict, "failed")
-        self.assertEqual(
-            outcome.intervention_evidence,
-            ["The candidate failed validation."],
-        )
-
-    def test_score_regression_rejects_intervention_but_keeps_hypothesis_open(self):
-        outcome = _summarize_outcome(
-            {
-                "decision": "rejected",
-                "outcome_type": "benchmark_rejected",
-                "parent_task_score": 0.8,
-                "candidate_task_score": 0.7,
-            }
-        )
-
-        self.assertEqual(outcome.status, "regressed")
-        self.assertEqual(outcome.hypothesis_verdict, "untested")
-        self.assertEqual(outcome.counterevidence, [])
-        self.assertEqual(outcome.intervention_verdict, "ineffective")
-        self.assertIn("-0.100000", outcome.intervention_evidence[0])
-
-    def test_task_transitions_are_read_from_generic_results(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            parent = root / "parent"
-            candidate = root / "candidate"
-            parent.mkdir()
-            candidate.mkdir()
-            (parent / "results.jsonl").write_text(
-                '{"task_id":"a","passed":false}\n'
-                '{"task_id":"b","passed":true}\n'
-                '{"task_id":"c","passed":false}\n',
-                encoding="utf-8",
+            memory = EvolutionMemory(Path(directory) / "memory.jsonl")
+            first = EvolutionMemoryEntry(
+                1,
+                "tools",
+                "cause",
+                "change description",
+                "rejected",
+                "benchmark_rejected",
+                "no gain",
+                0.5,
+                0.5,
+                [],
             )
-            (candidate / "results.jsonl").write_text(
-                '{"task_id":"a","passed":true}\n'
-                '{"task_id":"b","passed":false}\n'
-                '{"task_id":"c","passed":false}\n',
-                encoding="utf-8",
+            second = EvolutionMemoryEntry(
+                2,
+                "architecture",
+                "cause",
+                "change loop",
+                "accepted",
+                "accepted",
+                "gain",
+                0.5,
+                0.6,
+                ["src/tinyagent/agent.py"],
             )
+            memory.append(first)
+            memory.append(second)
 
-            transitions = _task_transitions(
-                {"output_dir": str(parent)},
-                {"output_dir": str(candidate)},
-            )
-
-            self.assertEqual(transitions["fixed_tasks"], ["a"])
-            self.assertEqual(transitions["regressed_tasks"], ["b"])
-            self.assertEqual(transitions["remaining_failures"], ["b", "c"])
-
-    @staticmethod
-    def _entry(
-        generation: int,
-        layer: str,
-        decision: str,
-        *,
-        related: list[str] | None = None,
-    ) -> EvolutionMemoryEntry:
-        return EvolutionMemoryEntry(
-            generation=generation,
-            parent_commit=f"parent-{generation}",
-            resulting_commit=f"child-{generation}" if decision == "accepted" else None,
-            decision=decision,
-            outcome_type="accepted" if decision == "accepted" else "benchmark_rejected",
-            reason="test outcome",
-            diagnoses=[
-                MemoryDiagnosis(
-                    primary_layer=layer,
-                    related_layers=related or [],
-                    problem="test problem",
-                    affected_tasks=["HumanEval/0"],
-                    proposed_direction="test direction",
-                    confidence=0.8,
-                )
-            ],
-            plan={
-                "target_diagnosis": 0,
-                "primary_layer": layer,
-                "hypothesis": "test hypothesis",
-                "intervention": "test intervention",
-            },
-            outcome_observations=[],
-            changed_paths=["src/tinyagent/agent.py"],
-            patch_path=f"generation-{generation:04d}/changes.patch",
-            patch_excerpt="- old behavior\n+ new behavior",
-            agent_output="updated implementation",
-            parent_task_score=0.5,
-            candidate_task_score=0.5,
-        )
+            self.assertEqual(memory.load(), [first, second])
+            self.assertEqual(memory.relevant({"tools"}), [first])
+            with self.assertRaisesRegex(ValueError, "already contains"):
+                memory.append(first)
 
 
 if __name__ == "__main__":

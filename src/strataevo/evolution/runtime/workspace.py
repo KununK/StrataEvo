@@ -77,7 +77,7 @@ class SelfWorkspace:
                     break
             return self._limit("\n".join(matches) or "No matches")
 
-        @tool(requires_approval=True)
+        @tool
         def write_file(path: str, content: str) -> str:
             """Create or replace a source file in the evolvable implementation."""
             target = self._resolve_mutable(path)
@@ -85,7 +85,7 @@ class SelfWorkspace:
             target.write_text(content, encoding="utf-8")
             return f"Wrote {len(content.encode())} bytes to {path}"
 
-        @tool(requires_approval=True)
+        @tool
         def replace_text(path: str, old: str, new: str) -> str:
             """Replace one exact occurrence; use replace_lines after an exact-match failure."""
             target = self._resolve_mutable(path)
@@ -96,7 +96,7 @@ class SelfWorkspace:
             target.write_text(content.replace(old, new), encoding="utf-8")
             return f"Updated {path}"
 
-        @tool(requires_approval=True)
+        @tool
         def replace_lines(path: str, start_line: int, end_line: int, content: str) -> str:
             """Replace an inclusive line range previously observed with read_file."""
             if start_line < 1 or end_line < start_line:
@@ -113,7 +113,7 @@ class SelfWorkspace:
             target.write_text("".join(lines), encoding="utf-8")
             return f"Updated lines {start_line}-{end_line} in {path}"
 
-        @tool(requires_approval=True)
+        @tool
         def delete_file(path: str) -> str:
             """Delete one file from the evolvable implementation."""
             target = self._resolve_mutable(path)

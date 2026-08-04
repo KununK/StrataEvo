@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import shlex
 import types
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
@@ -17,8 +16,6 @@ from typing import (
     get_type_hints,
 )
 
-Approval = Callable[[str, dict[str, Any]], bool]
-
 
 @dataclass(slots=True)
 class Tool:
@@ -26,7 +23,6 @@ class Tool:
     description: str
     function: Callable[..., Any]
     parameters: dict[str, Any]
-    requires_approval: bool = False
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -92,7 +88,6 @@ def tool(
     *,
     name: str | None = None,
     description: str | None = None,
-    requires_approval: bool = False,
 ):
     """Decorator that derives JSON Schema from a function's type hints."""
 
@@ -113,7 +108,6 @@ def tool(
             description or doc.split("\n", 1)[0] or fn.__name__,
             fn,
             {"type": "object", "properties": properties, "required": required},
-            requires_approval,
         )
 
     return wrap(function) if function is not None else wrap
@@ -138,15 +132,3 @@ def _json_schema(annotation: Any) -> dict[str, Any]:
         type(None): "null",
     }
     return {"type": types_by_annotation.get(annotation, "string")}
-
-
-def allow_all(_name: str, _arguments: dict[str, Any]) -> bool:
-    """Approve every side-effecting tool call."""
-    return True
-
-
-def terminal_approval(name: str, arguments: dict[str, Any]) -> bool:
-    """Ask the terminal user before a side-effecting tool call."""
-    preview = arguments.get("command") or arguments.get("path") or str(arguments)
-    answer = input(f"Approve {name}({shlex.quote(str(preview))})? [y/N] ")
-    return answer.strip().lower() in {"y", "yes"}

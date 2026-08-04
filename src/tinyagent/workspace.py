@@ -71,7 +71,7 @@ class Workspace:
                     break
             return self._limit("\n".join(matches) or "No matches")
 
-        @tool(requires_approval=True)
+        @tool
         def write_file(path: str, content: str) -> str:
             """Create or replace a UTF-8 file in the workspace."""
             target = self._resolve(path)
@@ -79,7 +79,7 @@ class Workspace:
             target.write_text(content, encoding="utf-8")
             return f"Wrote {len(content.encode())} bytes to {path}"
 
-        @tool(requires_approval=True)
+        @tool
         def replace_text(path: str, old: str, new: str) -> str:
             """Replace one exact, unique text occurrence in a file."""
             target = self._resolve(path)
@@ -90,7 +90,7 @@ class Workspace:
             target.write_text(content.replace(old, new), encoding="utf-8")
             return f"Updated {path}"
 
-        @tool(requires_approval=True)
+        @tool
         def run_shell(command: str) -> str:
             """Run a shell command in the workspace and return exit code and output."""
             completed = subprocess.run(

@@ -7,7 +7,6 @@ from tinyagent import (
     Message,
     ModelResponse,
     ScriptedModel,
-    SessionStore,
     ToolCall,
     ToolRegistry,
     Usage,
@@ -35,9 +34,7 @@ class AgentTests(unittest.TestCase):
                 ModelResponse(Message("assistant", "five"), Usage(8, 1)),
             ]
         )
-        events = []
         agent = Agent(model, ToolRegistry([add]))
-        agent.events.subscribe(lambda event: events.append(event.type))
 
         result = agent.run("calculate")
 
@@ -46,19 +43,6 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(result.usage, Usage(18, 3))
         self.assertEqual(result.messages[-2].role, "tool")
         self.assertEqual(result.messages[-2].content, "5")
-        self.assertEqual(
-            events,
-            [
-                "run_start",
-                "model_start",
-                "model_end",
-                "tool_start",
-                "tool_end",
-                "model_start",
-                "model_end",
-                "run_end",
-            ],
-        )
 
     def test_unknown_tool_error_is_returned_to_model(self):
         model = ScriptedModel(
@@ -71,39 +55,6 @@ class AgentTests(unittest.TestCase):
         self.assertIn("unknown tool", result.messages[-2].content)
         self.assertEqual(result.output, "recovered")
 
-    def test_approval_can_deny_side_effect(self):
-        called = False
-
-        @tool(requires_approval=True)
-        def dangerous() -> str:
-            """Do something."""
-            nonlocal called
-            called = True
-            return "done"
-
-        model = ScriptedModel(
-            [
-                Message("assistant", tool_calls=[ToolCall("1", "dangerous", {})]),
-                Message("assistant", "denied"),
-            ]
-        )
-        result = Agent(model, ToolRegistry([dangerous]), approval=lambda _n, _a: False).run("go")
-        self.assertFalse(called)
-        self.assertIn("denied by approval policy", result.messages[-2].content)
-
-    def test_session_is_saved_and_loaded(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = SessionStore(directory)
-            first = Agent(ScriptedModel([Message("assistant", "one")]), session_store=store)
-            first.run("hello", session_id="paper-1")
-
-            second_model = ScriptedModel([Message("assistant", "two")])
-            Agent(second_model, session_store=store).run("continue", session_id="paper-1")
-            sent = second_model.requests[0]
-            self.assertEqual(
-                [message.content for message in sent][-3:], ["hello", "one", "continue"]
-            )
-
     def test_max_steps_stops_loop(self):
         calls = [
             Message("assistant", tool_calls=[ToolCall(str(i), "missing", {})]) for i in range(2)
@@ -112,14 +63,13 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, "max_steps")
         self.assertEqual(result.steps, 2)
 
-    def test_workspace_tools_are_rooted_and_write_requires_approval(self):
+    def test_workspace_tools_are_rooted(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(directory)
             tools = ToolRegistry(workspace.tools())
             write = tools.get("write_file")
             read = tools.get("read_file")
             self.assertIsNotNone(write)
-            self.assertTrue(write.requires_approval)
             self.assertIsNotNone(read)
             write.run({"path": "notes/a.txt", "content": "alpha\nbeta"})
             self.assertIn(

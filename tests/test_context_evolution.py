@@ -4,33 +4,17 @@ import unittest
 from pathlib import Path
 
 from eval.coding_agent import SYSTEM_PROMPT, USER_PROMPT, load_context_prompts
-from strataevo.evolution.diagnosis import Diagnosis, DiagnosisReport, EvolutionLayer
+from strataevo.evolution.decision import EvolutionDecision, EvolutionLayer
 from strataevo.evolution.layers.context import (
     ContextEvolver,
     ContextProfile,
     evolve_context,
 )
-from strataevo.evolution.plan import (
-    EvolutionPlan,
-    EvolutionPlanReport,
-    ExpectedOutcome,
-    MetricDirection,
-)
-from strataevo.evolution.runtime.contract import EvaluationContract
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ModelResponse, ScriptedModel, Usage
 
-CONTRACT = EvaluationContract(
-    benchmark="test",
-    objective="improve task score",
-    direct_paths=("src/tinyagent",),
-    deferred_paths=(),
-)
-
 
 class FakeEvaluator:
-    contract = CONTRACT
-
     def __init__(self, scores):
         self.scores = iter(scores)
         self.contexts = []
@@ -67,7 +51,7 @@ class ContextEvolutionTests(unittest.TestCase):
         )
 
         profile, metadata = ContextEvolver(model).create_candidate(
-            ContextProfile(), self._diagnosis(), self._plan(), [], CONTRACT
+            ContextProfile(), self._decision(), []
         )
 
         self.assertIn("required artifact", profile.system_prompt_addendum)
@@ -75,14 +59,13 @@ class ContextEvolutionTests(unittest.TestCase):
         self.assertEqual(metadata["output_tokens"], 10)
         request = model.requests[0][1].content
         self.assertIn("parent_context", request)
-        self.assertIn("evaluation_contract", request)
 
     def test_empty_context_candidate_is_rejected(self):
         model = ScriptedModel([Message("assistant", json.dumps({"system_prompt_addendum": ""}))])
 
         with self.assertRaisesRegex(ValueError, "at least one addendum"):
             ContextEvolver(model, repair_retries=0).create_candidate(
-                ContextProfile(), self._diagnosis(), self._plan(), [], CONTRACT
+                ContextProfile(), self._decision(), []
             )
 
     def test_accepted_candidate_remains_active_and_is_persisted(self):
@@ -109,8 +92,7 @@ class ContextEvolutionTests(unittest.TestCase):
                 generation_dir,
                 parent_report,
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_context=None,
                 model_name="test-model",
@@ -153,8 +135,7 @@ class ContextEvolutionTests(unittest.TestCase):
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_context=parent,
                 model_name="test-model",
@@ -196,8 +177,7 @@ class ContextEvolutionTests(unittest.TestCase):
                 generation_dir,
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_context=None,
                 model_name="test-model",
@@ -239,8 +219,7 @@ class ContextEvolutionTests(unittest.TestCase):
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_context=parent,
                 model_name="test-model",
@@ -264,8 +243,7 @@ class ContextEvolutionTests(unittest.TestCase):
                 generation_dir,
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_context=None,
                 model_name="test-model",
@@ -299,8 +277,7 @@ class ContextEvolutionTests(unittest.TestCase):
                 Path(directory) / "generation-0001",
                 EvaluationReport(0.5, {}, "parent", "parent.log"),
                 evaluator,
-                self._diagnosis(),
-                self._plan(),
+                self._decision(),
                 [],
                 parent_context=parent,
                 model_name="test-model",
@@ -330,52 +307,14 @@ class ContextEvolutionTests(unittest.TestCase):
         self.assertEqual(user, USER_PROMPT + "\n\nTask addition.")
 
     @staticmethod
-    def _diagnosis():
-        return DiagnosisReport(
-            source_dir="parent",
-            input_case_count=1,
-            diagnoses=[
-                Diagnosis(
-                    primary_layer=EvolutionLayer.CONTEXT,
-                    related_layers=[],
-                    problem="Instructions do not focus the agent on the requested artifact.",
-                    evidence=["A candidate was missing."],
-                    affected_tasks=["task/1"],
-                    proposed_direction="Clarify the reusable completion policy.",
-                    confidence=0.8,
-                )
-            ],
-            input_tokens=0,
-            output_tokens=0,
-            raw_output="{}",
-            attempts=["{}"],
-        )
-
-    @staticmethod
-    def _plan():
-        return EvolutionPlanReport(
-            plan=EvolutionPlan(
-                target_diagnosis=0,
-                primary_layer=EvolutionLayer.CONTEXT,
-                hypothesis="A clearer reusable instruction will reduce missing artifacts.",
-                intervention="Add one concise prompt instruction.",
-                expected_outcomes=[
-                    ExpectedOutcome(
-                        metric="task_score",
-                        direction=MetricDirection.INCREASE,
-                        reason="The intervention should solve more tasks.",
-                    )
-                ],
-                likely_files=[],
-                expected_long_term_value="Reusable across coding tasks.",
-                prerequisites=[],
-                confidence=0.8,
-            ),
-            available_metrics={"task_score": 0.5},
-            input_tokens=0,
-            output_tokens=0,
-            raw_output="{}",
-            attempts=["{}"],
+    def _decision():
+        return EvolutionDecision(
+            EvolutionLayer.CONTEXT,
+            ["A candidate was missing."],
+            ["task/1"],
+            "A clearer reusable instruction will reduce missing artifacts.",
+            "Add one concise prompt instruction.",
+            [],
         )
 
 

@@ -9,10 +9,8 @@ from typing import Any
 
 from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
 
-from ..diagnosis import DiagnosisReport
+from ..decision import EvolutionDecision
 from ..memory import EvolutionMemoryEntry, memory_context
-from ..plan import EvolutionPlanReport
-from ..runtime.contract import EvaluationContract
 from ..runtime.evaluation import BenchmarkEvaluator
 from ..runtime.structured import request_json
 from ..types import EvaluationReport, EvolutionConfig
@@ -57,20 +55,15 @@ class ToolEvolver:
         self,
         parent: ToolProfile,
         tool_descriptions: dict[str, str],
-        diagnosis: DiagnosisReport,
-        plan: EvolutionPlanReport,
+        decision: EvolutionDecision,
         history: list[EvolutionMemoryEntry],
-        contract: EvaluationContract,
         feedback: list[dict[str, Any]] | None = None,
     ) -> tuple[ToolProfile, dict[str, Any]]:
-        selected = diagnosis.diagnoses[plan.plan.target_diagnosis]
         payload = {
             "parent_tool_profile": parent.to_dict(),
             "available_tools": tool_descriptions,
-            "diagnosis": selected.to_dict(),
-            "plan": plan.plan.to_dict(),
-            "evaluation_contract": contract.to_dict(),
-            "prior_evolution": memory_context(history, max_chars=8_000),
+            "decision": decision.to_dict(),
+            "prior_evolution": memory_context(history),
             "refinement_feedback": (feedback or [])[-1:],
         }
         known_tools = set(tool_descriptions)
@@ -87,7 +80,7 @@ class ToolEvolver:
                 Message("system", TOOL_EVOLVER_SYSTEM_PROMPT),
                 Message(
                     "user",
-                    "Create one general tool-description candidate for the supplied plan. "
+                    "Create one general tool-description candidate for the supplied decision. "
                     "When refinement_feedback is present, revise the prior candidate in response "
                     "to its measured outcome. "
                     "Return only the requested JSON.\n\n"
@@ -127,8 +120,7 @@ def evolve_tools(
     generation_dir: Path,
     parent_report: EvaluationReport,
     evaluator: BenchmarkEvaluator,
-    diagnosis: DiagnosisReport,
-    plan: EvolutionPlanReport,
+    decision: EvolutionDecision,
     history: list[EvolutionMemoryEntry],
     *,
     parent_profile: dict[str, Any] | None,
@@ -154,10 +146,8 @@ def evolve_tools(
         candidate, metadata = evolver.create_candidate(
             parent,
             descriptions,
-            diagnosis,
-            plan,
+            decision,
             history,
-            evaluator.contract,
             feedback,
         )
         return candidate.to_dict(), metadata

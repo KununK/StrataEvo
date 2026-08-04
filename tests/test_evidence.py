@@ -3,194 +3,55 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from strataevo.evolution.evidence import (
-    CodingAgentEvidenceCollector,
-    EvidenceBundle,
-    TaskEvidence,
-)
+from strataevo.evolution.evidence import CodingAgentEvidenceCollector
 
 
-class EvidenceCollectorTests(unittest.TestCase):
-    def test_collects_artifact_lifecycle_and_persists_bundle(self):
+class EvidenceTests(unittest.TestCase):
+    def test_collector_preserves_ordered_tool_events(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._write_fixture(root)
+            (root / "summary.json").write_text('{"evaluated": 1}', encoding="utf-8")
+            (root / "results.jsonl").write_text(
+                json.dumps({"task_id": "task/1", "status": "missing_candidate", "passed": False})
+                + "\n",
+                encoding="utf-8",
+            )
+            messages = [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "1",
+                            "name": "write_file",
+                            "arguments": {"path": "solution.py"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "1", "content": "wrote"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "2",
+                            "name": "run_shell",
+                            "arguments": {"command": "rm solution.py"},
+                        }
+                    ],
+                },
+            ]
+            (root / "generations.jsonl").write_text(
+                json.dumps({"task_id": "task/1", "messages": messages, "stop_reason": "completed"})
+                + "\n",
+                encoding="utf-8",
+            )
 
-            bundle = CodingAgentEvidenceCollector("humaneval").collect_and_write(root)
+            bundle = CodingAgentEvidenceCollector().collect_and_write(root)
 
             self.assertEqual(
-                [case.task_id for case in bundle.cases], ["HumanEval/1", "HumanEval/2"]
+                [event.name for event in bundle.cases[0].tool_events], ["write_file", "run_shell"]
             )
-            passed, missing = bundle.cases
-            self.assertTrue(passed.candidate_present)
-            self.assertIn("max_steps", passed.signals)
-            self.assertTrue(missing.candidate_created)
-            self.assertEqual(
-                missing.signals,
-                [
-                    "missing_candidate",
-                    "artifact_missing",
-                    "artifact_created_then_missing",
-                    "completed_without_artifact",
-                ],
-            )
-            self.assertEqual(bundle.signal_counts["artifact_created_then_missing"], 1)
-            self.assertEqual(
-                [(event.index, event.name) for event in missing.tool_events],
-                [(1, "write_file"), (2, "run_shell")],
-            )
-            self.assertEqual(missing.tool_events[0].result, "Wrote solution.py")
-            self.assertEqual(missing.tool_events[1].result, "exit_code=0")
-            evidence = json.loads((root / "evidence.json").read_text(encoding="utf-8"))
-            self.assertEqual(evidence["cases"][1]["task_id"], "HumanEval/2")
-            self.assertNotIn("candidate_deleted", evidence["cases"][1])
-            self.assertNotIn("tool_sequence", evidence["cases"][1])
-
-    def test_legacy_delete_signals_are_ignored(self):
-        data = {
-            "task_id": "HumanEval/0",
-            "entry_point": "answer",
-            "status": "missing_candidate",
-            "passed": False,
-            "stop_reason": "completed",
-            "steps": 1,
-            "input_tokens": 1,
-            "output_tokens": 1,
-            "generation_seconds": 0.1,
-            "test_seconds": 0.0,
-            "candidate_path": None,
-            "candidate_present": False,
-            "candidate_created": True,
-            "candidate_deleted": True,
-            "tool_sequence": ["run_shell"],
-            "shell_commands": ["rm solution.py"],
-            "error": "",
-            "generation_path": "generations.jsonl",
-            "session_path": None,
-            "signals": ["artifact_deleted"],
-        }
-
-        case = TaskEvidence.from_dict(data)
-
-        self.assertFalse(hasattr(case, "artifact_delete_attempted"))
-        self.assertNotIn("artifact_deleted", case.signals)
-        self.assertEqual(
-            [(event.name, event.arguments) for event in case.tool_events],
-            [("run_shell", {"command": "rm solution.py"})],
-        )
-
-        bundle = EvidenceBundle.from_dict(
-            {
-                "evaluator": "humaneval",
-                "source_dir": "evaluation",
-                "summary": {},
-                "signal_counts": {"artifact_deleted": 1},
-                "cases": [data],
-            }
-        )
-        self.assertEqual(bundle.signal_counts, {})
-
-    def test_rejects_results_without_matching_generation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self._write_fixture(root)
-            (root / "generations.jsonl").write_text("", encoding="utf-8")
-
-            with self.assertRaisesRegex(ValueError, "task mismatch"):
-                CodingAgentEvidenceCollector("humaneval").collect(root)
-
-    def test_generic_collector_records_active_benchmark(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self._write_fixture(root)
-
-            bundle = CodingAgentEvidenceCollector("mbpp").collect(root)
-
-            self.assertEqual(bundle.evaluator, "mbpp")
-
-    @staticmethod
-    def _write_fixture(root: Path) -> None:
-        (root / "candidates").mkdir(parents=True)
-        (root / "sessions").mkdir()
-        (root / "candidates/HumanEval_1.py").write_text(
-            "def answer(): return 1\n", encoding="utf-8"
-        )
-        (root / "sessions/HumanEval_2.json").write_text('{"messages": []}\n', encoding="utf-8")
-        (root / "summary.json").write_text(
-            json.dumps({"evaluated": 2, "passed": 1, "pass_at_1": 0.5}), encoding="utf-8"
-        )
-        results = [
-            {
-                "task_id": "HumanEval/1",
-                "entry_point": "answer",
-                "passed": True,
-                "status": "pass",
-                "test_seconds": 0.1,
-                "stderr": "",
-            },
-            {
-                "task_id": "HumanEval/2",
-                "entry_point": "missing",
-                "passed": False,
-                "status": "missing_candidate",
-                "test_seconds": 0.0,
-                "stderr": "solution.py was not created",
-            },
-        ]
-        generations = [
-            {
-                "task_id": "HumanEval/1",
-                "stop_reason": "max_steps",
-                "steps": 12,
-                "usage": {"input_tokens": 10, "output_tokens": 2},
-                "generation_seconds": 1.0,
-                "messages": [],
-            },
-            {
-                "task_id": "HumanEval/2",
-                "stop_reason": "completed",
-                "steps": 4,
-                "usage": {"input_tokens": 12, "output_tokens": 3},
-                "generation_seconds": 2.0,
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "id": "write-1",
-                                "name": "write_file",
-                                "arguments": {"path": "solution.py", "content": "pass\n"},
-                            },
-                            {
-                                "id": "shell-1",
-                                "name": "run_shell",
-                                "arguments": {"command": "rm -f solution.py"},
-                            },
-                        ],
-                    },
-                    {
-                        "role": "tool",
-                        "name": "write_file",
-                        "tool_call_id": "write-1",
-                        "content": "Wrote solution.py",
-                    },
-                    {
-                        "role": "tool",
-                        "name": "run_shell",
-                        "tool_call_id": "shell-1",
-                        "content": "exit_code=0",
-                    },
-                ],
-            },
-        ]
-        EvidenceCollectorTests._write_jsonl(root / "results.jsonl", results)
-        EvidenceCollectorTests._write_jsonl(root / "generations.jsonl", generations)
-
-    @staticmethod
-    def _write_jsonl(path: Path, rows: list[dict]) -> None:
-        path.write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
-        )
+            self.assertIn("artifact_created_then_missing", bundle.cases[0].signals)
+            self.assertTrue((root / "evidence.json").is_file())
 
 
 if __name__ == "__main__":
