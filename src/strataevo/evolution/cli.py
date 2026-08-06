@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     _validate_args(args)
     repo = Path(args.repo).resolve()
     run_name = args.run_name or datetime.now(UTC).strftime("run-%Y%m%d-%H%M%S")
-    run_dir = repo / "evolution" / "runs" / run_name
+    runs_dir = f"runs_{args.branch.replace('/', '_')}"
+    run_dir = repo / "evolution" / runs_dir / run_name
     config_path = run_dir / "config.json"
 
     git = GitRepository(repo, DEFAULT_MUTABLE_PATHS)

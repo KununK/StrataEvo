@@ -9,5 +9,4 @@ dist/
 .venv/
 eval/logs/
 eval/outputs/
-evolution/runs/
-evolution/runs_old_*/
+evolution/runs_*/
