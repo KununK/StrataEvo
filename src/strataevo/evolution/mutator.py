@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -70,9 +69,6 @@ def mutate(
     evolution_decision = json.dumps(decision.to_dict(), indent=2, ensure_ascii=False)
     prior_evolution = json.dumps(memory_context(history), indent=2, ensure_ascii=False)
     mutable_paths = json.dumps(config.mutable_paths, ensure_ascii=False)
-    source_outline = json.dumps(
-        _source_outline(repo, decision.likely_files), indent=2, ensure_ascii=False
-    )
     prompt = f"""Implement generation {generation}.
 
 Parent evaluation:
@@ -80,9 +76,6 @@ Parent evaluation:
 
 Evolution decision:
 {evolution_decision}
-
-Likely source symbols:
-{source_outline}
 
 Relevant prior evolution outcomes:
 {prior_evolution}
@@ -92,8 +85,7 @@ Boundaries:
 - Make the smallest coherent change that directly tests the decision's hypothesis and intervention.
 - Change relevant runtime behavior; comments, types, formatting, or unrelated API edits alone do
   not implement an intervention.
-- Inspect the referenced evidence and likely source symbol before editing.
-- Preserve the intervention's Current, Change, and Verify contract.
+- Inspect the referenced evidence before editing and stay on the selected failure mechanism.
 - Use evaluate_candidate when the candidate is executable, then revise from its feedback.
 - The controller retains the best evaluated improvement and otherwise restores the parent.
 
@@ -170,25 +162,3 @@ def _feedback_object(feedback: str) -> dict:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def _source_outline(repo: Path, likely_files: list[str]) -> dict[str, list[str]]:
-    outline: dict[str, list[str]] = {}
-    for relative in likely_files:
-        source = repo / relative
-        if source.suffix != ".py" or not source.is_file():
-            continue
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-        symbols: list[str] = []
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                symbols.append(f"{node.name}:{node.lineno}")
-            elif isinstance(node, ast.ClassDef):
-                symbols.append(f"{node.name}:{node.lineno}")
-                symbols.extend(
-                    f"{node.name}.{member.name}:{member.lineno}"
-                    for member in node.body
-                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
-                )
-        outline[relative] = symbols
-    return outline

@@ -88,8 +88,6 @@ other layer must return empty likely_files. Choose model only when model_evoluti
 A later observed tool call that directly explains an outcome is stronger evidence than an inferred
 environment fault. For architecture, connect that event to agent-loop behavior in an existing
 source file and state the smallest observable behavior change rather than inventing a subsystem.
-Architecture interventions must use "Current: ...; Change: ...; Verify: ..." to make the runtime
-change executable. Every other layer may use a concise free-form intervention.
 Use only current-task evidence; history only shows prior intervention outcomes. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
 "affected_tasks":["..."],"hypothesis":"...","intervention":"...","likely_files":[]}"""
