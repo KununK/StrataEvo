@@ -25,10 +25,7 @@ class DecisionTests(unittest.TestCase):
             EvolutionConfig(repo=".", run_name="test"),
         )
         self.assertEqual(decision.layer, EvolutionLayer.ARCHITECTURE)
-        system_prompt = model.requests[0][0].content
         request = model.requests[0][1].content
-        self.assertIn("current runtime behavior", system_prompt)
-        self.assertIn("Prompt-only guidance belongs to context", system_prompt)
         self.assertLess(request.index("write_file"), request.index("run_shell"))
 
     def test_decision_rejects_unknown_tasks(self):
@@ -71,7 +68,9 @@ class DecisionTests(unittest.TestCase):
         decision = EvolutionDecision.from_dict(
             data,
             {"task/1"},
-            EvolutionConfig(repo=".", run_name="test", model_evolution=True, force_layer="model"),
+            EvolutionConfig(
+                repo=".", run_name="test", model_evolution=True, force_layer="model"
+            ),
         )
         self.assertEqual(decision.likely_files, [])
 

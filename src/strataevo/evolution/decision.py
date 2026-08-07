@@ -75,14 +75,11 @@ SYSTEM_PROMPT = """Choose one evidence-grounded failure mechanism and one concre
 Use only current-task evidence. Prior generations only show which interventions succeeded or
 failed. Select the closest layer: model weights, reusable context, model-facing tool descriptions,
 or agent architecture. Architecture may modify only src/tinyagent and must name likely files.
-Its intervention must state the current runtime behavior, the intended behavior, and one way to
-verify the change. Prompt-only guidance belongs to context, not architecture. Every other layer
-must return an empty likely_files list.
+Every other layer must return an empty likely_files list.
 Choose model only when model_evolution_enabled is true. Do not repeat a rejected intervention
 without new evidence. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
-"affected_tasks":["..."],"hypothesis":"...",
-"intervention":"Current: ...; Change: ...; Verify: ...","likely_files":[]}"""
+"affected_tasks":["..."],"hypothesis":"...","intervention":"...","likely_files":[]}"""
 
 
 class EvolutionDecider:

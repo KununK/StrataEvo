@@ -1,7 +1,9 @@
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from strataevo.evolution.layers.architecture import CandidateEvaluationSession
 from strataevo.evolution.runtime.repository import GitRepository
@@ -15,6 +17,32 @@ class FakeEvaluator:
 
 
 class TransactionTests(unittest.TestCase):
+    def test_empty_staged_diff_is_not_evaluated_or_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = Mock()
+            repository.changed_paths.return_value = ["src/tinyagent/agent.py"]
+            repository.staged_diff.return_value = ""
+            evaluator = Mock()
+            parent = EvaluationReport(0.5, {"passed": 5}, "parent", "parent.log")
+            session = CandidateEvaluationSession(
+                root,
+                repository,
+                evaluator,
+                parent,
+                root / "generation",
+                [],
+                1,
+            )
+
+            feedback = json.loads(session.evaluate())
+            best = session.restore_best()
+
+            self.assertEqual(feedback["outcome"], "no_change")
+            self.assertIsNone(best)
+            evaluator.evaluate.assert_not_called()
+            repository.apply_patch.assert_not_called()
+
     def test_executable_candidate_can_be_restored_and_rolled_back(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -65,6 +65,15 @@ class CandidateEvaluationSession:
 
         self.git.stage()
         patch = self.git.staged_diff()
+        if not patch.strip():
+            return self._store(
+                EvaluationAttempt(
+                    len(self.attempts) + 1,
+                    "no_change",
+                    "candidate has no staged source diff",
+                    [],
+                )
+            )
         duplicate = self._find_patch(patch)
         if duplicate:
             self._restore(self._best_improving_attempt())
@@ -178,4 +187,6 @@ class CandidateEvaluationSession:
         if self.git.changed_paths():
             self.git.rollback()
         if attempt and attempt.patch_path:
-            self.git.apply_patch(Path(attempt.patch_path))
+            patch_path = Path(attempt.patch_path)
+            if patch_path.stat().st_size:
+                self.git.apply_patch(patch_path)
