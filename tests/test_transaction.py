@@ -29,7 +29,7 @@ class TransactionTests(unittest.TestCase):
                 for item in SelfWorkspace(root, ["src/tinyagent"], []).tools()
             }
 
-            with self.assertRaisesRegex(ValueError, "use replace_text or replace_lines"):
+            with self.assertRaisesRegex(ValueError, "use replace_text"):
                 tools["write_file"].run(
                     {"path": "src/tinyagent/agent.py", "content": "VALUE = 2\n"}
                 )
@@ -38,6 +38,7 @@ class TransactionTests(unittest.TestCase):
             )
 
             self.assertEqual(source.read_text(encoding="utf-8"), "VALUE = 2\n")
+            self.assertNotIn("replace_lines", tools)
             self.assertNotIn("delete_file", tools)
 
     def test_empty_staged_diff_is_not_evaluated_or_restored(self):
