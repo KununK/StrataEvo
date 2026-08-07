@@ -50,6 +50,40 @@ class DecisionTests(unittest.TestCase):
                 data, {"task/1"}, EvolutionConfig(repo=".", run_name="test")
             )
 
+    def test_direct_tool_removal_is_not_routed_to_architecture(self):
+        architecture = {
+            "layer": "architecture",
+            "evidence": ["task/1 removed its output"],
+            "affected_tasks": ["task/1"],
+            "hypothesis": "The loop lost the output.",
+            "intervention": "Change the loop.",
+            "likely_files": ["src/tinyagent/agent.py"],
+        }
+        tools = {
+            "layer": "tools",
+            "evidence": ["run_shell removed the output"],
+            "affected_tasks": ["task/1"],
+            "hypothesis": "The shell tool permits destructive cleanup.",
+            "intervention": "Clarify the shell tool contract.",
+            "likely_files": [],
+        }
+        model = ScriptedModel(
+            [
+                Message("assistant", json.dumps(architecture)),
+                Message("assistant", json.dumps(tools)),
+            ]
+        )
+
+        decision = EvolutionDecider(model).decide(
+            self._bundle("rm solution.py"),
+            EvaluationReport(0.5, {}, "evaluation", "evaluation.log"),
+            [],
+            EvolutionConfig(repo=".", run_name="test"),
+        )
+
+        self.assertEqual(decision.layer, EvolutionLayer.TOOLS)
+        self.assertIn("choose tools, not architecture", model.requests[1][-1].content)
+
     def test_architecture_decision_cannot_escape_mutable_source(self):
         data = {
             "layer": "architecture",
@@ -97,7 +131,7 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(decision.likely_files, [])
 
     @staticmethod
-    def _bundle():
+    def _bundle(command: str = "python solution.py"):
         case = TaskEvidence(
             "task/1",
             "missing_candidate",
@@ -108,7 +142,7 @@ class DecisionTests(unittest.TestCase):
             True,
             [
                 ToolEvent(1, "write_file", {"path": "solution.py"}, "wrote"),
-                ToolEvent(2, "run_shell", {"command": "rm solution.py"}, "ok"),
+                ToolEvent(2, "run_shell", {"command": command}, "ok"),
             ],
             "missing",
             ["artifact_missing"],

@@ -121,10 +121,16 @@ class EvolutionDecider:
             "mutable_source_files": _mutable_source_files(config),
         }
         known_tasks = {case.task_id for case in cases}
+
+        def parse(data: dict[str, Any]) -> EvolutionDecision:
+            decision = EvolutionDecision.from_dict(data, known_tasks, config)
+            _validate_layer_capability(decision, cases)
+            return decision
+
         return request_json(
             self.model,
             [Message("system", SYSTEM_PROMPT), Message("user", json.dumps(payload))],
-            lambda data: EvolutionDecision.from_dict(data, known_tasks, config),
+            parse,
             label="evolution decision",
             repair_retries=1,
         ).value
@@ -187,4 +193,41 @@ def _mutable_source_files(config: EvolutionConfig) -> list[str]:
         for root in config.mutable_paths
         for path in (repo / root).rglob("*.py")
         if path.is_file()
+    )
+
+
+def _validate_layer_capability(
+    decision: EvolutionDecision, cases: list[TaskEvidence]
+) -> None:
+    if decision.layer != EvolutionLayer.ARCHITECTURE:
+        return
+    selected = {case.task_id: case for case in cases}
+    if any(
+        _artifact_removed_by_tool(selected[task_id])
+        for task_id in decision.affected_tasks
+    ):
+        raise ValueError(
+            "an observed tool call removed the output artifact; choose tools, not architecture"
+        )
+
+
+def _artifact_removed_by_tool(case: TaskEvidence) -> bool:
+    if not case.candidate_created or case.candidate_present:
+        return False
+    writes = {
+        str(event.arguments.get("path", "")): event.index
+        for event in case.tool_events
+        if event.name == "write_file" and event.arguments.get("path")
+    }
+    return any(
+        event.name == "run_shell"
+        and any(
+            token in str(event.arguments.get("command", ""))
+            for token in ("rm ", "unlink ")
+        )
+        and any(
+            path in str(event.arguments.get("command", "")) and event.index > write_index
+            for path, write_index in writes.items()
+        )
+        for event in case.tool_events
     )
