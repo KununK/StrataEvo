@@ -3,13 +3,26 @@ import unittest
 from pathlib import Path
 
 from strataevo.evolution.generation import _prepare_generation_dir
-from strataevo.evolution.mutator import _run_refinement_session
+from strataevo.evolution.mutator import _run_refinement_session, _source_outline
 from strataevo.evolution.runtime.evaluation import promotion_decision
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Agent, Message, ScriptedModel
 
 
 class EvolutionTests(unittest.TestCase):
+    def test_source_outline_names_architecture_symbols(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "agent.py"
+            source.write_text(
+                "class Agent:\n    def run(self):\n        pass\n", encoding="utf-8"
+            )
+
+            self.assertEqual(
+                _source_outline(root, ["agent.py"]),
+                {"agent.py": ["Agent:1", "Agent.run:2"]},
+            )
+
     def test_failed_generation_directory_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "generation-0001"
