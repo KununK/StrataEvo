@@ -125,6 +125,28 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(decision.intervention, "Require a final artifact check.")
         self.assertIn("exactly repeats", model.requests[1][-1].content)
 
+    def test_forced_architecture_bypasses_autonomous_layer_routing(self):
+        response = {
+            "layer": "architecture",
+            "evidence": ["task/1 removed its output"],
+            "affected_tasks": ["task/1"],
+            "hypothesis": "The loop lost the output.",
+            "intervention": "Change the loop.",
+            "likely_files": ["src/tinyagent/agent.py"],
+        }
+        model = ScriptedModel([Message("assistant", json.dumps(response))])
+
+        decision = EvolutionDecider(model).decide(
+            self._bundle("rm solution.py"),
+            EvaluationReport(0.5, {}, "evaluation", "evaluation.log"),
+            [],
+            EvolutionConfig(
+                repo=".", run_name="test", force_layer="architecture"
+            ),
+        )
+
+        self.assertEqual(decision.layer, EvolutionLayer.ARCHITECTURE)
+
     def test_architecture_decision_cannot_escape_mutable_source(self):
         data = {
             "layer": "architecture",

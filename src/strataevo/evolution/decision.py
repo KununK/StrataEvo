@@ -125,7 +125,8 @@ class EvolutionDecider:
 
         def parse(data: dict[str, Any]) -> EvolutionDecision:
             decision = EvolutionDecision.from_dict(data, known_tasks, config)
-            _validate_layer_capability(decision, cases)
+            if not config.force_layer:
+                _validate_layer_capability(decision, cases)
             _validate_intervention_novelty(decision, history)
             return decision
 
