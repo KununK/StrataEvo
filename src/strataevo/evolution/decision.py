@@ -88,7 +88,8 @@ other layer must return empty likely_files. Choose model only when model_evoluti
 A later observed tool call that directly explains an outcome is stronger evidence than an inferred
 environment fault. For architecture, connect that event to agent-loop behavior in an existing
 source file and state the smallest observable behavior change rather than inventing a subsystem.
-Use only current-task evidence; history only shows prior intervention outcomes. Return JSON:
+Use only current-task evidence; history only shows prior intervention outcomes. Do not repeat an
+exact rejected intervention. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
 "affected_tasks":["..."],"hypothesis":"...","intervention":"...","likely_files":[]}"""
 
@@ -125,6 +126,7 @@ class EvolutionDecider:
         def parse(data: dict[str, Any]) -> EvolutionDecision:
             decision = EvolutionDecision.from_dict(data, known_tasks, config)
             _validate_layer_capability(decision, cases)
+            _validate_intervention_novelty(decision, history)
             return decision
 
         return request_json(
@@ -231,3 +233,15 @@ def _artifact_removed_by_tool(case: TaskEvidence) -> bool:
         )
         for event in case.tool_events
     )
+
+
+def _validate_intervention_novelty(
+    decision: EvolutionDecision, history: list[EvolutionMemoryEntry]
+) -> None:
+    intervention = " ".join(decision.intervention.casefold().split())
+    if any(
+        entry.decision == "rejected"
+        and intervention == " ".join(entry.intervention.casefold().split())
+        for entry in history
+    ):
+        raise ValueError("intervention exactly repeats a rejected prior intervention")
