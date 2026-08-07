@@ -67,6 +67,35 @@ class TransactionTests(unittest.TestCase):
             evaluator.evaluate.assert_not_called()
             repository.apply_patch.assert_not_called()
 
+    def test_comment_only_python_candidate_is_not_evaluated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "tinyagent" / "agent.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            self._git(root, "init")
+            self._git(root, "config", "user.email", "test@example.com")
+            self._git(root, "config", "user.name", "Test")
+            self._git(root, "add", ".")
+            self._git(root, "commit", "-m", "parent")
+            source.write_text("# explanation\nVALUE = 1\n", encoding="utf-8")
+            evaluator = Mock()
+            session = CandidateEvaluationSession(
+                root,
+                GitRepository(root, ["src/tinyagent"]),
+                evaluator,
+                EvaluationReport(0.5, {"passed": 5}, "parent", "parent.log"),
+                root / "generation",
+                [],
+                1,
+            )
+
+            feedback = json.loads(session.evaluate())
+
+            self.assertEqual(feedback["outcome"], "no_change")
+            self.assertIn("comments or formatting", feedback["reason"])
+            evaluator.evaluate.assert_not_called()
+
     def test_executable_candidate_can_be_restored_and_rolled_back(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

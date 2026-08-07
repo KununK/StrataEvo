@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -72,6 +73,15 @@ class CandidateEvaluationSession:
                     "no_change",
                     "candidate has no staged source diff",
                     [],
+                )
+            )
+        if not self._has_python_semantic_change(paths):
+            return self._store(
+                EvaluationAttempt(
+                    len(self.attempts) + 1,
+                    "no_change",
+                    "candidate only changes Python comments or formatting",
+                    paths,
                 )
             )
         duplicate = self._find_patch(patch)
@@ -174,6 +184,21 @@ class CandidateEvaluationSession:
             ),
             None,
         )
+
+    def _has_python_semantic_change(self, paths: list[str]) -> bool:
+        python_paths = [path for path in paths if path.endswith(".py")]
+        if len(python_paths) != len(paths):
+            return True
+        for path in python_paths:
+            before = self.git.head_text(path) or ""
+            target = self.repo / path
+            after = target.read_text(encoding="utf-8") if target.exists() else ""
+            try:
+                if ast.dump(ast.parse(before)) != ast.dump(ast.parse(after)):
+                    return True
+            except SyntaxError:
+                return True
+        return False
 
     def _best_attempt(self) -> EvaluationAttempt | None:
         evaluated = [item for item in self.attempts if item.report]
