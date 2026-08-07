@@ -46,10 +46,12 @@ class ToolEvolutionTests(unittest.TestCase):
             {"read_file": "Read a file."},
             self._decision(),
             [],
+            [{"task_id": "task/1", "events": [{"name": "read_file"}]}],
         )
         self.assertIn("read_file", profile.description_addenda)
         self.assertEqual(metadata["input_tokens"], 20)
         self.assertIn("available_tools", model.requests[0][1].content)
+        self.assertIn("affected_task_tool_events", model.requests[0][1].content)
 
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown tools"):
