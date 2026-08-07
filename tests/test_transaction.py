@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 from strataevo.evolution.layers.architecture import CandidateEvaluationSession
 from strataevo.evolution.runtime.repository import GitRepository
+from strataevo.evolution.runtime.workspace import SelfWorkspace
 from strataevo.evolution.types import EvaluationReport
 
 
@@ -17,6 +18,28 @@ class FakeEvaluator:
 
 
 class TransactionTests(unittest.TestCase):
+    def test_self_workspace_requires_local_edits_for_existing_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "src" / "tinyagent" / "agent.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            tools = {
+                item.name: item
+                for item in SelfWorkspace(root, ["src/tinyagent"], []).tools()
+            }
+
+            with self.assertRaisesRegex(ValueError, "use replace_text or replace_lines"):
+                tools["write_file"].run(
+                    {"path": "src/tinyagent/agent.py", "content": "VALUE = 2\n"}
+                )
+            tools["replace_text"].run(
+                {"path": "src/tinyagent/agent.py", "old": "VALUE = 1", "new": "VALUE = 2"}
+            )
+
+            self.assertEqual(source.read_text(encoding="utf-8"), "VALUE = 2\n")
+            self.assertNotIn("delete_file", tools)
+
     def test_empty_staged_diff_is_not_evaluated_or_restored(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

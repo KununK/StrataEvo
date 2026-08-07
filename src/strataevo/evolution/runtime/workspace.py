@@ -79,8 +79,10 @@ class SelfWorkspace:
 
         @tool
         def write_file(path: str, content: str) -> str:
-            """Create or replace a source file in the evolvable implementation."""
+            """Create a new source file; use replace_text or replace_lines for existing files."""
             target = self._resolve_mutable(path)
+            if target.exists():
+                raise ValueError("file exists; use replace_text or replace_lines")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             return f"Wrote {len(content.encode())} bytes to {path}"
@@ -112,15 +114,6 @@ class SelfWorkspace:
             lines[start_line - 1 : end_line] = replacement.splitlines(keepends=True)
             target.write_text("".join(lines), encoding="utf-8")
             return f"Updated lines {start_line}-{end_line} in {path}"
-
-        @tool
-        def delete_file(path: str) -> str:
-            """Delete one file from the evolvable implementation."""
-            target = self._resolve_mutable(path)
-            if not target.is_file():
-                raise ValueError(f"not a file: {path}")
-            target.unlink()
-            return f"Deleted {path}"
 
         @tool
         def show_diff() -> str:
@@ -168,7 +161,6 @@ class SelfWorkspace:
             write_file,
             replace_text,
             replace_lines,
-            delete_file,
             show_diff,
             run_validation,
         ]
