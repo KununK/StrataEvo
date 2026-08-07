@@ -83,6 +83,8 @@ Relevant prior evolution outcomes:
 Boundaries:
 - Modify only {mutable_paths}.
 - Make the smallest coherent change that directly tests the decision's hypothesis and intervention.
+- Change relevant runtime behavior; comments, types, formatting, or unrelated API edits alone do
+  not implement an intervention.
 - Inspect the referenced evidence before editing and stay on the selected failure mechanism.
 - Use evaluate_candidate when the candidate is executable, then revise from its feedback.
 - The controller retains the best evaluated improvement and otherwise restores the parent.
