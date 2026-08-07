@@ -31,7 +31,10 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("generated-code correctness", system_prompt)
         self.assertIn("operations inside generated code are not agent", system_prompt)
         self.assertIn("assertion failure is model evidence", system_prompt)
+        self.assertIn("later observed tool call", system_prompt)
+        self.assertIn("rather than inventing a subsystem", system_prompt)
         self.assertLess(request.index("write_file"), request.index("run_shell"))
+        self.assertIn("src/tinyagent/agent.py", request)
 
     def test_decision_rejects_unknown_tasks(self):
         data = {
@@ -57,6 +60,20 @@ class DecisionTests(unittest.TestCase):
             "likely_files": ["eval/run.py"],
         }
         with self.assertRaisesRegex(ValueError, "mutable likely_files"):
+            EvolutionDecision.from_dict(
+                data, {"task/1"}, EvolutionConfig(repo=".", run_name="test")
+            )
+
+    def test_architecture_decision_requires_an_existing_source_file(self):
+        data = {
+            "layer": "architecture",
+            "evidence": ["x"],
+            "affected_tasks": ["task/1"],
+            "hypothesis": "x",
+            "intervention": "x",
+            "likely_files": ["src/tinyagent/missing.py"],
+        }
+        with self.assertRaisesRegex(ValueError, "existing mutable likely_files"):
             EvolutionDecision.from_dict(
                 data, {"task/1"}, EvolutionConfig(repo=".", run_name="test")
             )

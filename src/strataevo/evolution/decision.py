@@ -64,8 +64,12 @@ class EvolutionDecision:
 
         files = _strings(data.get("likely_files"))
         if layer == EvolutionLayer.ARCHITECTURE:
-            if not files or any(not _is_mutable(path, config.mutable_paths) for path in files):
-                raise ValueError("architecture decision requires mutable likely_files")
+            if not files or any(
+                not _is_mutable(path, config.mutable_paths)
+                or not (Path(config.repo) / path).is_file()
+                for path in files
+            ):
+                raise ValueError("architecture decision requires existing mutable likely_files")
         else:
             files = []
         return cls(layer, evidence, tasks, hypothesis, intervention, files)
@@ -81,6 +85,9 @@ Python, library, mathematical, and data-structure operations inside generated co
 tools. A task-specific wrong answer or assertion failure is model evidence unless the trace shows
 a different layer's mechanism caused it. Architecture must name mutable src/tinyagent files; every
 other layer must return empty likely_files. Choose model only when model_evolution_enabled is true.
+A later observed tool call that directly explains an outcome is stronger evidence than an inferred
+environment fault. For architecture, connect that event to agent-loop behavior in an existing
+source file and state the smallest observable behavior change rather than inventing a subsystem.
 Use only current-task evidence; history only shows prior intervention outcomes. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
 "affected_tasks":["..."],"hypothesis":"...","intervention":"...","likely_files":[]}"""
@@ -111,6 +118,7 @@ class EvolutionDecider:
             "forced_layer": config.force_layer,
             "model_evolution_enabled": config.model_evolution,
             "mutable_paths": config.mutable_paths,
+            "mutable_source_files": _mutable_source_files(config),
         }
         known_tasks = {case.task_id for case in cases}
         return request_json(
@@ -169,4 +177,14 @@ def _is_mutable(path: str, roots: list[str]) -> bool:
     clean = path.strip("/")
     return any(
         clean == root.strip("/") or clean.startswith(root.strip("/") + "/") for root in roots
+    )
+
+
+def _mutable_source_files(config: EvolutionConfig) -> list[str]:
+    repo = Path(config.repo).resolve()
+    return sorted(
+        str(path.relative_to(repo))
+        for root in config.mutable_paths
+        for path in (repo / root).rglob("*.py")
+        if path.is_file()
     )
