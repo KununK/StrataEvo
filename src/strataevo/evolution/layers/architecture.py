@@ -80,7 +80,7 @@ class CandidateEvaluationSession:
                 EvaluationAttempt(
                     len(self.attempts) + 1,
                     "no_change",
-                    "candidate only changes Python comments or formatting",
+                    "candidate has no Python semantic change",
                     paths,
                 )
             )
@@ -188,7 +188,7 @@ class CandidateEvaluationSession:
     def _has_python_semantic_change(self, paths: list[str]) -> bool:
         python_paths = [path for path in paths if path.endswith(".py")]
         if len(python_paths) != len(paths):
-            return True
+            return False
         for path in python_paths:
             before = self.git.head_text(path) or ""
             target = self.repo / path
