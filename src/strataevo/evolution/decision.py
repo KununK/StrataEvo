@@ -71,13 +71,17 @@ class EvolutionDecision:
         return cls(layer, evidence, tasks, hypothesis, intervention, files)
 
 
-SYSTEM_PROMPT = """Choose one evidence-grounded failure mechanism and one concrete intervention.
-Use only current-task evidence. Prior generations only show which interventions succeeded or
-failed. Select the closest layer: model weights, reusable context, model-facing tool descriptions,
-or agent architecture. Architecture may modify only src/tinyagent and must name likely files.
-Every other layer must return an empty likely_files list.
-Choose model only when model_evolution_enabled is true. Do not repeat a rejected intervention
-without new evidence. Return JSON:
+SYSTEM_PROMPT = """Choose one evidence-grounded failure mechanism and one intervention.
+Select the layer whose executor can change the observed cause:
+- model: knowledge, reasoning, or generated-code correctness;
+- context: reusable instructions or task workflow;
+- tools: observed misuse of an existing agent tool caused by its description or interface;
+- architecture: observed agent-loop, state, context-management, or tool-orchestration behavior.
+Python, library, mathematical, and data-structure operations inside generated code are not agent
+tools. A task-specific wrong answer or assertion failure is model evidence unless the trace shows
+a different layer's mechanism caused it. Architecture must name mutable src/tinyagent files; every
+other layer must return empty likely_files. Choose model only when model_evolution_enabled is true.
+Use only current-task evidence; history only shows prior intervention outcomes. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
 "affected_tasks":["..."],"hypothesis":"...","intervention":"...","likely_files":[]}"""
 

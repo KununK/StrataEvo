@@ -25,7 +25,12 @@ class DecisionTests(unittest.TestCase):
             EvolutionConfig(repo=".", run_name="test"),
         )
         self.assertEqual(decision.layer, EvolutionLayer.ARCHITECTURE)
+        system_prompt = model.requests[0][0].content
         request = model.requests[0][1].content
+        self.assertIn("executor can change the observed cause", system_prompt)
+        self.assertIn("generated-code correctness", system_prompt)
+        self.assertIn("operations inside generated code are not agent", system_prompt)
+        self.assertIn("assertion failure is model evidence", system_prompt)
         self.assertLess(request.index("write_file"), request.index("run_shell"))
 
     def test_decision_rejects_unknown_tasks(self):
