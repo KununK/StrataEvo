@@ -81,8 +81,6 @@ class SelfWorkspace:
         def write_file(path: str, content: str) -> str:
             """Create a new source file; use replace_text for existing files."""
             target = self._resolve_mutable(path)
-            if target.suffix != ".py":
-                raise ValueError("new source files must use the .py suffix")
             if target.exists():
                 raise ValueError("file exists; use replace_text")
             target.parent.mkdir(parents=True, exist_ok=True)

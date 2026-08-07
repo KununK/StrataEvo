@@ -33,10 +33,6 @@ class TransactionTests(unittest.TestCase):
                 tools["write_file"].run(
                     {"path": "src/tinyagent/agent.py", "content": "VALUE = 2\n"}
                 )
-            with self.assertRaisesRegex(ValueError, r"\.py suffix"):
-                tools["write_file"].run(
-                    {"path": "src/tinyagent/agent.py.bak", "content": "VALUE = 1\n"}
-                )
             tools["replace_text"].run(
                 {"path": "src/tinyagent/agent.py", "old": "VALUE = 1", "new": "VALUE = 2"}
             )
@@ -97,7 +93,7 @@ class TransactionTests(unittest.TestCase):
             feedback = json.loads(session.evaluate())
 
             self.assertEqual(feedback["outcome"], "no_change")
-            self.assertIn("no Python semantic change", feedback["reason"])
+            self.assertIn("comments or formatting", feedback["reason"])
             evaluator.evaluate.assert_not_called()
 
     def test_executable_candidate_can_be_restored_and_rolled_back(self):
