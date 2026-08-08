@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from tinyagent import (
-    Agent,
     AgentResult,
+    Message,
+    Model,
     OpenAICompatibleModel,
     ToolRegistry,
     Usage,
@@ -25,6 +28,54 @@ refine that intervention from measured feedback. The evaluator and tests are rea
 weaken the task or fabricate results. Stop when no evidence-based improvement remains."""
 
 MUTATOR_CONTEXT_LIMIT_CHARS = 60_000
+
+
+class RefinementAgent(Protocol):
+    max_steps: int
+
+    def run(
+        self,
+        prompt: str,
+        *,
+        history: list[Message] | None = None,
+    ) -> AgentResult: ...
+
+
+@dataclass(slots=True)
+class _MetaAgent:
+    """Fixed tool loop used to repair the evolvable task Agent."""
+
+    model: Model
+    tools: ToolRegistry
+    system_prompt: str
+    max_steps: int
+    context_limit_chars: int
+
+    def run(self, prompt: str, *, history: list[Message] | None = None) -> AgentResult:
+        messages = list(history or [])
+        if not messages or messages[0].role != "system":
+            messages.insert(0, Message("system", self.system_prompt))
+        messages.append(Message("user", prompt))
+        usage = Usage()
+        for step in range(1, self.max_steps + 1):
+            messages = _compact_meta_messages(messages, self.context_limit_chars)
+            response = self.model.complete(messages, self.tools.schemas)
+            usage = usage + response.usage
+            assistant = response.message
+            messages.append(assistant)
+            if not assistant.tool_calls:
+                return AgentResult(assistant.content, messages, usage, step, "completed")
+            for call in assistant.tool_calls:
+                item = self.tools.get(call.name)
+                if item is None:
+                    result = f"Error: unknown tool '{call.name}'"
+                else:
+                    try:
+                        result = item.run(call.arguments)
+                    except Exception as error:
+                        result = f"Error: {type(error).__name__}: {error}"
+                messages.append(Message("tool", result, tool_call_id=call.id, name=call.name))
+        return AgentResult("", messages, usage, self.max_steps, "max_steps")
 
 
 def mutate(
@@ -50,7 +101,7 @@ def mutate(
         temperature=0.0,
         timeout=300.0,
     )
-    agent = Agent(
+    agent = _MetaAgent(
         model=model,
         tools=ToolRegistry(workspace.tools()),
         system_prompt=SYSTEM_PROMPT,
@@ -86,6 +137,9 @@ Boundaries:
 - Change relevant runtime behavior; comments, types, formatting, or unrelated API edits alone do
   not implement an intervention.
 - Inspect the referenced evidence before editing and stay on the selected failure mechanism.
+- Prefer the smallest exact repair for a directly observed control-flow contradiction; do not
+  invent task-specific artifact behavior. Strip displayed line-number prefixes when copying source
+  text and preserve its indentation.
 - Use evaluate_candidate when the candidate is executable, then revise from its feedback.
 - The controller retains the best evaluated improvement and otherwise restores the parent.
 
@@ -94,7 +148,7 @@ Candidate benchmark evaluations available: {config.max_eval_attempts}."""
 
 
 def _run_refinement_session(
-    agent: Agent,
+    agent: RefinementAgent,
     initial_prompt: str,
     evaluate_candidate: Callable[[], str],
     config: EvolutionConfig,
@@ -162,3 +216,31 @@ def _feedback_object(feedback: str) -> dict:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _compact_meta_messages(messages: list[Message], limit: int) -> list[Message]:
+    if _messages_size(messages) <= limit:
+        return messages
+    latest_user = max(
+        (index for index, message in enumerate(messages) if message.role == "user"),
+        default=0,
+    )
+    prefix = ([messages[0]] if messages[0].role == "system" else []) + [messages[latest_user]]
+    groups: list[list[Message]] = []
+    for message in messages[latest_user + 1 :]:
+        if message.role == "assistant" or not groups:
+            groups.append([message])
+        else:
+            groups[-1].append(message)
+    while len(groups) > 1 and _messages_size(
+        [*prefix, *(message for group in groups for message in group)]
+    ) > limit:
+        groups.pop(0)
+    return [*prefix, *(message for group in groups for message in group)]
+
+
+def _messages_size(messages: list[Message]) -> int:
+    return sum(
+        len(json.dumps(message.to_dict(), ensure_ascii=False, default=str))
+        for message in messages
+    )

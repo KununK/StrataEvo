@@ -88,6 +88,8 @@ other layer must return empty likely_files. Choose model only when model_evoluti
 A later observed tool call that directly explains an outcome is stronger evidence than an inferred
 environment fault. For architecture, connect that event to agent-loop behavior in an existing
 source file and state the smallest observable behavior change rather than inventing a subsystem.
+If max_steps is reported with fewer steps than configured, diagnose premature loop termination
+rather than normal budget exhaustion or artifact persistence.
 Use only current-task evidence; history only shows prior intervention outcomes. Do not repeat an
 exact rejected intervention. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
@@ -118,6 +120,7 @@ class EvolutionDecider:
             "prior_generations": memory_context(history),
             "forced_layer": config.force_layer,
             "model_evolution_enabled": config.model_evolution,
+            "benchmark_max_steps": config.benchmark_max_steps,
             "mutable_paths": config.mutable_paths,
             "mutable_source_files": _mutable_source_files(config),
         }
