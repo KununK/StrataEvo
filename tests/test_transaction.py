@@ -33,6 +33,12 @@ class TransactionTests(unittest.TestCase):
                 tools["write_file"].run(
                     {"path": "src/tinyagent/agent.py", "content": "VALUE = 2\n"}
                 )
+            self.assertEqual(
+                tools["read_file"].run(
+                    {"path": "src/tinyagent/agent.py", "start_line": 1, "end_line": 1}
+                ),
+                "VALUE = 1",
+            )
             tools["replace_text"].run(
                 {"path": "src/tinyagent/agent.py", "old": "VALUE = 1", "new": "VALUE = 2"}
             )

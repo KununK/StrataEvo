@@ -109,7 +109,8 @@ def _task_evidence(
     result: dict[str, Any],
     generation: dict[str, Any],
 ) -> TaskEvidence:
-    events = _tool_events(generation.get("messages") or [])
+    messages = generation.get("messages") or []
+    events = _tool_events(messages)
     created = any(
         event.name == "write_file"
         and Path(str(event.arguments.get("path", ""))).name == "solution.py"
@@ -129,6 +130,8 @@ def _task_evidence(
         signals.append("artifact_created_then_missing")
     if error:
         signals.append("agent_error")
+    if _has_orphan_tool_result(messages):
+        signals.append("orphan_tool_result")
     return TaskEvidence(
         task_id,
         status,
@@ -161,6 +164,18 @@ def _tool_events(messages: list[dict[str, Any]]) -> list[ToolEvent]:
             if event:
                 event.result = str(message.get("content", ""))
     return events
+
+
+def _has_orphan_tool_result(messages: list[dict[str, Any]]) -> bool:
+    pending: set[str] = set()
+    for message in messages:
+        pending.update(str(call.get("id", "")) for call in message.get("tool_calls") or [])
+        if message.get("role") == "tool":
+            call_id = str(message.get("tool_call_id", ""))
+            if call_id not in pending:
+                return True
+            pending.remove(call_id)
+    return False
 
 
 def _rows_by_task(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

@@ -44,14 +44,11 @@ class SelfWorkspace:
 
         @tool
         def read_file(path: str, start_line: int = 1, end_line: int = 500) -> str:
-            """Read a repository text file with line numbers."""
+            """Read an exact line range from a repository text file."""
             if start_line < 1 or end_line < start_line:
                 raise ValueError("invalid line range")
             lines = self._resolve(path).read_text(encoding="utf-8").splitlines()
-            output = "\n".join(
-                f"{number:>6}  {lines[number - 1]}"
-                for number in range(start_line, min(end_line, len(lines)) + 1)
-            )
+            output = "\n".join(lines[start_line - 1 : end_line])
             return self._limit(output)
 
         @tool

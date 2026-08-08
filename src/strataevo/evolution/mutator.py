@@ -138,8 +138,7 @@ Boundaries:
   not implement an intervention.
 - Inspect the referenced evidence before editing and stay on the selected failure mechanism.
 - Prefer the smallest exact repair for a directly observed control-flow contradiction; do not
-  invent task-specific artifact behavior. Strip displayed line-number prefixes when copying source
-  text and preserve its indentation.
+  invent task-specific artifact behavior. Preserve the observed source indentation.
 - Use evaluate_candidate when the candidate is executable, then revise from its feedback.
 - The controller retains the best evaluated improvement and otherwise restores the parent.
 

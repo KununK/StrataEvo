@@ -17,6 +17,7 @@ class EvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             messages = [
+                {"role": "tool", "tool_call_id": "orphan", "content": "lost call"},
                 {
                     "role": "assistant",
                     "tool_calls": [
@@ -51,6 +52,7 @@ class EvidenceTests(unittest.TestCase):
                 [event.name for event in bundle.cases[0].tool_events], ["write_file", "run_shell"]
             )
             self.assertIn("artifact_created_then_missing", bundle.cases[0].signals)
+            self.assertIn("orphan_tool_result", bundle.cases[0].signals)
             self.assertTrue((root / "evidence.json").is_file())
 
 

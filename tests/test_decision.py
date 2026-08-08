@@ -34,6 +34,7 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("assertion failure is model evidence", system_prompt)
         self.assertIn("later observed tool call", system_prompt)
         self.assertIn("premature loop termination", system_prompt)
+        self.assertIn("orphan_tool_result", system_prompt)
         self.assertIn("rather than inventing a subsystem", system_prompt)
         self.assertLess(request.index("write_file"), request.index("run_shell"))
         self.assertIn("src/tinyagent/agent.py", request)

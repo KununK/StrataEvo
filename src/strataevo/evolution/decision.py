@@ -90,6 +90,8 @@ environment fault. For architecture, connect that event to agent-loop behavior i
 source file and state the smallest observable behavior change rather than inventing a subsystem.
 If max_steps is reported with fewer steps than configured, diagnose premature loop termination
 rather than normal budget exhaustion or artifact persistence.
+An orphan_tool_result means a tool result lost its initiating assistant call; treat it as direct
+architecture evidence of broken message-state transfer, not artifact persistence.
 Use only current-task evidence; history only shows prior intervention outcomes. Do not repeat an
 exact rejected intervention. Return JSON:
 {"layer":"model|context|tools|architecture","evidence":["..."],
