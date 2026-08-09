@@ -16,6 +16,7 @@ from .memory import EvolutionMemory, EvolutionMemoryEntry
 from .mutator import mutate
 from .runtime.evaluation import create_evaluator, promotion_decision, validation_commands
 from .runtime.repository import GitRepository
+from .runtime.structured import StructuredResponseError
 from .types import EvaluationReport, EvolutionConfig, GenerationRecord
 from .utils.io import read_json, write_json
 
@@ -50,7 +51,25 @@ def run_one_generation(config_path: Path) -> int:
     decision_path = directory / "decision.json"
 
     try:
-        decision = decide_evolution(config, parent, decision_path, memory.latest())
+        try:
+            decision = decide_evolution(config, parent, decision_path, memory.latest())
+        except StructuredResponseError as error:
+            record = GenerationRecord(
+                generation,
+                parent_commit,
+                None,
+                "decision",
+                "rejected",
+                "decision_invalid",
+                str(error),
+                parent.to_dict(),
+                None,
+            )
+            write_json(directory / "record.json", record.to_dict())
+            state["next_generation"] = generation + 1
+            write_json(state_path, state)
+            _print(record)
+            return 0
         layer = decision.layer.value
         if layer == "context":
             result = evolve_context(

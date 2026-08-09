@@ -4,6 +4,7 @@ import unittest
 from strataevo.evolution.decision import EvolutionDecider, EvolutionDecision, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence, ToolEvent
 from strataevo.evolution.memory import EvolutionMemoryEntry
+from strataevo.evolution.runtime.structured import StructuredResponseError
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ScriptedModel
 
@@ -87,6 +88,27 @@ class DecisionTests(unittest.TestCase):
 
         self.assertEqual(decision.layer, EvolutionLayer.TOOLS)
         self.assertIn("choose tools, not architecture", model.requests[1][-1].content)
+
+    def test_exhausted_decision_repairs_raise_structured_error(self):
+        response = {
+            "layer": "architecture",
+            "evidence": ["task/1 removed its output"],
+            "affected_tasks": ["task/1"],
+            "hypothesis": "The loop lost the output.",
+            "intervention": "Change the loop.",
+            "likely_files": ["src/tinyagent/agent.py"],
+        }
+        model = ScriptedModel(
+            [Message("assistant", json.dumps(response)) for _ in range(2)]
+        )
+
+        with self.assertRaisesRegex(StructuredResponseError, "remained invalid"):
+            EvolutionDecider(model).decide(
+                self._bundle("rm solution.py"),
+                EvaluationReport(0.5, {}, "evaluation", "evaluation.log"),
+                [],
+                EvolutionConfig(repo=".", run_name="test"),
+            )
 
     def test_rejected_intervention_cannot_repeat_exactly(self):
         repeated = {

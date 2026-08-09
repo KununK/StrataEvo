@@ -12,6 +12,10 @@ from tinyagent import Message, Model
 STRUCTURED_MAX_TOKENS = 2048
 
 
+class StructuredResponseError(ValueError):
+    """The model exhausted its attempts without producing a valid response."""
+
+
 @dataclass(slots=True)
 class StructuredResponse[T]:
     value: T
@@ -61,7 +65,7 @@ def request_json[T](
                 break
             continue
         return StructuredResponse(value, input_tokens, output_tokens, raw_output, attempts)
-    raise ValueError(
+    raise StructuredResponseError(
         f"{label} remained invalid after {len(attempts)} attempt(s): {last_error}"
     ) from last_error
 
