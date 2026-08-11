@@ -3,7 +3,6 @@ import unittest
 
 from strataevo.evolution.decision import EvolutionDecider, EvolutionDecision, EvolutionLayer
 from strataevo.evolution.evidence import EvidenceBundle, TaskEvidence, ToolEvent
-from strataevo.evolution.memory import EvolutionMemoryEntry
 from strataevo.evolution.runtime.structured import StructuredResponseError
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
 from tinyagent import Message, ScriptedModel
@@ -109,46 +108,6 @@ class DecisionTests(unittest.TestCase):
                 [],
                 EvolutionConfig(repo=".", run_name="test"),
             )
-
-    def test_rejected_intervention_cannot_repeat_exactly(self):
-        repeated = {
-            "layer": "context",
-            "evidence": ["task/1 failed"],
-            "affected_tasks": ["task/1"],
-            "hypothesis": "The workflow is unclear.",
-            "intervention": "Clarify the workflow.",
-            "likely_files": [],
-        }
-        revised = {**repeated, "intervention": "Require a final artifact check."}
-        model = ScriptedModel(
-            [
-                Message("assistant", json.dumps(repeated)),
-                Message("assistant", json.dumps(revised)),
-            ]
-        )
-        history = [
-            EvolutionMemoryEntry(
-                1,
-                "context",
-                "The workflow is unclear.",
-                "  CLARIFY the workflow. ",
-                "rejected",
-                "benchmark_rejected",
-                "no gain",
-                0.5,
-                0.5,
-            )
-        ]
-
-        decision = EvolutionDecider(model).decide(
-            self._bundle(),
-            EvaluationReport(0.5, {}, "evaluation", "evaluation.log"),
-            history,
-            EvolutionConfig(repo=".", run_name="test"),
-        )
-
-        self.assertEqual(decision.intervention, "Require a final artifact check.")
-        self.assertIn("exactly repeats", model.requests[1][-1].content)
 
     def test_forced_architecture_bypasses_autonomous_layer_routing(self):
         response = {

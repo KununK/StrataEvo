@@ -132,7 +132,6 @@ class EvolutionDecider:
             decision = EvolutionDecision.from_dict(data, known_tasks, config)
             if not config.force_layer:
                 _validate_layer_capability(decision, cases)
-            _validate_intervention_novelty(decision, history)
             return decision
 
         return request_json(
@@ -239,15 +238,3 @@ def _artifact_removed_by_tool(case: TaskEvidence) -> bool:
         )
         for event in case.tool_events
     )
-
-
-def _validate_intervention_novelty(
-    decision: EvolutionDecision, history: list[EvolutionMemoryEntry]
-) -> None:
-    intervention = " ".join(decision.intervention.casefold().split())
-    if any(
-        entry.decision == "rejected"
-        and intervention == " ".join(entry.intervention.casefold().split())
-        for entry in history
-    ):
-        raise ValueError("intervention exactly repeats a rejected prior intervention")
