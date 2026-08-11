@@ -52,6 +52,7 @@ class ToolEvolutionTests(unittest.TestCase):
         self.assertEqual(metadata["input_tokens"], 20)
         self.assertIn("available_tools", model.requests[0][1].content)
         self.assertIn("affected_task_tool_events", model.requests[0][1].content)
+        self.assertIn("required task output", model.requests[0][0].content)
 
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown tools"):

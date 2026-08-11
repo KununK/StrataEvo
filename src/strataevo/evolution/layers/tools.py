@@ -108,7 +108,8 @@ Change only concise, general description addenda for existing tools. Clarify int
 sequencing, verification, or common failure recovery. Do not change tool names, arguments,
 implementations, permissions, or approval requirements. Do not include benchmark answers.
 Ground guidance in the supplied tool events and describe only behavior the model should follow;
-do not repeat base descriptions or claim unimplemented automatic tool behavior.
+do not repeat base descriptions or claim unimplemented automatic tool behavior. Never recommend
+cleanup that removes a required task output before the agent returns.
 
 Return exactly:
 {
