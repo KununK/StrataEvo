@@ -4,6 +4,10 @@ StrataEvo 是一个最小四层自进化 Agent 研究基线。它评测当前 Ag
 问题，选择 Model、Context、Tools 或 Architecture 中的一层执行单项干预，并仅在任务分数
 明确提升时保留候选。
 
+当前 `main` 对应经过双数据集重复实验验证的阶段性基线。它已经证明自主组合、Context 和 Tools
+能够产生可复现提升；Model 与 Architecture 仍是明确的研究缺口，不应把当前版本解释为四层能力
+均已完成。
+
 ## 核心边界
 
 生产闭环只保留四项可信边界：
@@ -66,7 +70,7 @@ uv sync --locked
 ```bash
 strataevo \
   --run-name humaneval-minimal-smoke \
-  --branch evo_minimal_core \
+  --branch main \
   --benchmark humaneval \
   --generations 1 \
   --eval-offset 110 \
@@ -79,7 +83,7 @@ strataevo \
 ```bash
 strataevo \
   --run-name mbpp-minimal-four-layer \
-  --branch evo_minimal_core \
+  --branch main \
   --benchmark mbpp \
   --generations 5 \
   --eval-workers 10 \
@@ -103,6 +107,39 @@ strataevo --run-name mbpp-minimal-four-layer --generations 3 --resume
 - **Architecture**：由自修改 Agent 修改 `src/tinyagent/`，验证后按 benchmark 分数晋级。
 
 Model 层是在当前任务上进行 verifier-guided 测试时适应，不应被解释为 held-out 泛化结果。
+
+## 阶段性实验结果
+
+自主多 Run 使用 HumanEval、MBPP 各 3 次独立运行，每次 10 代、64 题，不强制层选择：
+
+| 数据集 | Baseline 汇总 | Final 汇总 | 净增 | 提升 runs |
+| --- | ---: | ---: | ---: | ---: |
+| HumanEval | 145/192 | 177/192 | +32 | 3/3 |
+| MBPP | 156/192 | 176/192 | +20 | 3/3 |
+| 合计 | 301/384 | 353/384 | +52 | 6/6 |
+
+全量五代自主进化：
+
+| 数据集 | Baseline | Final | 净增 |
+| --- | ---: | ---: | ---: |
+| HumanEval | 136/164 | 158/164 | +22 |
+| MBPP | 200/257 | 233/257 | +33 |
+
+四层独立矩阵使用两个数据集、每层各 2 次独立运行、每次 3 代和 32 题：
+
+| 层 | HumanEval | MBPP | 提升单元 |
+| --- | --- | --- | ---: |
+| Context | 25→27；22→28 | 18→27；23→28 | 4/4 |
+| Tools | 24→27；22→28 | 22→25；20→27 | 4/4 |
+| Model | 23→23；27→27 | 20→20；20→26 | 1/4 |
+| Architecture（自然任务） | 25→25；26→26 | 26→26；24→24 | 0/4 |
+
+受控结构实验进一步确认：当前版本在“第一批工具调用后提前终止”上 0/3 修复，在“工具结果覆盖
+历史消息”上 0/4 修复。原因是 Architecture Mutator 仍复用待修任务 Agent；当 Agent 循环本身
+损坏时，修复器也无法完成读取、编辑和验证。因此当前最可信结论是：整体自主进化稳定，Context
+与 Tools 独立能力可复现；Model 泛化和 Architecture 自修复尚未完成。
+
+完整实验过程、后续消融与失败经验记录在仓库外研究报告中，不属于运行时依赖。
 
 ## 验证
 
