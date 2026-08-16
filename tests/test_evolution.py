@@ -3,13 +3,36 @@ import unittest
 from pathlib import Path
 
 from strataevo.evolution.generation import _prepare_generation_dir
-from strataevo.evolution.mutator import _run_refinement_session
+from strataevo.evolution.mutator import _MetaAgent, _run_refinement_session
 from strataevo.evolution.runtime.evaluation import promotion_decision
 from strataevo.evolution.types import EvaluationReport, EvolutionConfig
-from tinyagent import Agent, Message, ScriptedModel
+from tinyagent import Message, ScriptedModel, ToolCall, ToolRegistry, tool
 
 
 class EvolutionTests(unittest.TestCase):
+    def test_meta_agent_preserves_tool_history_and_continues(self):
+        @tool
+        def inspect() -> str:
+            """Inspect state."""
+            return "observed"
+
+        model = ScriptedModel(
+            [
+                Message("assistant", tool_calls=[ToolCall("1", "inspect", {})]),
+                Message("assistant", "fixed"),
+            ]
+        )
+        agent = _MetaAgent(model, ToolRegistry([inspect]), "system", 2, 10_000)
+
+        result = agent.run("repair")
+
+        self.assertEqual(result.output, "fixed")
+        self.assertEqual(result.steps, 2)
+        self.assertEqual(
+            [message.role for message in model.requests[1]],
+            ["system", "user", "assistant", "tool"],
+        )
+
     def test_failed_generation_directory_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "generation-0001"
@@ -35,7 +58,7 @@ class EvolutionTests(unittest.TestCase):
             ]
         )
         result = _run_refinement_session(
-            Agent(model),
+            _MetaAgent(model, ToolRegistry(), "system", 20, 60_000),
             "initial task",
             lambda: next(feedback),
             EvolutionConfig(repo=".", run_name="test", mutator_rounds=2),
