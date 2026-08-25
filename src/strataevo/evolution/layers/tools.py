@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tinyagent import Message, Model, OpenAICompatibleModel, Workspace
+from tinyagent import Message, Model, OpenAICompatibleModel
 
 from ..decision import EvolutionDecision
 from ..memory import EvolutionMemoryEntry, memory_context
@@ -129,8 +129,7 @@ def evolve_tools(
 ) -> ProfileEvolutionResult:
     """Generate, evaluate, and retain or restore one tool-description profile."""
     tool_dir = generation_dir / "tools"
-    tools = Workspace(config.repo).tools()
-    descriptions = {item.name: item.description for item in tools}
+    descriptions = evaluator.available_tool_descriptions()
     parent = ToolProfile.from_dict(parent_profile, set(descriptions))
     model = model or OpenAICompatibleModel(
         model=model_name,

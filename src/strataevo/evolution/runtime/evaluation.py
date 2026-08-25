@@ -18,6 +18,8 @@ class Evaluator(Protocol):
 
     def set_tool_profile(self, profile: dict[str, Any] | None) -> None: ...
 
+    def available_tool_descriptions(self) -> dict[str, str]: ...
+
     def evaluate(self, output_dir: Path) -> EvaluationReport: ...
 
 
@@ -95,6 +97,8 @@ class BenchmarkSpec:
     execution_module: str
     objective: str
     arguments: tuple[str, ...] = ()
+    tool_descriptions: dict[str, str] | None = None
+    supports_model_evolution: bool = True
 
 
 def validation_commands(repo: Path) -> list[list[str]]:
@@ -158,6 +162,13 @@ class BenchmarkEvaluator:
 
     def set_tool_profile(self, profile: dict[str, Any] | None) -> None:
         self.tool_profile = profile
+
+    def available_tool_descriptions(self) -> dict[str, str]:
+        if self.spec.tool_descriptions is not None:
+            return dict(self.spec.tool_descriptions)
+        from tinyagent import Workspace
+
+        return {item.name: item.description for item in Workspace(self.repo).tools()}
 
     def evaluate(self, output_dir: Path) -> EvaluationReport:
         print(
@@ -237,9 +248,21 @@ MBPP = BenchmarkSpec(
     objective="Improve the task-solving Tinyagent measured by MBPP pass@1.",
 )
 
+BFCL = BenchmarkSpec(
+    name="bfcl",
+    display_name="BFCL V4 multi-turn",
+    module="eval.bfcl.run",
+    execution_module="eval.bfcl.execution",
+    objective="Improve Tinyagent on executable BFCL V4 multi-turn tool-use tasks.",
+    arguments=("--category", "multi_turn_base"),
+    tool_descriptions={"*": "Task-specific executable tools supplied by each BFCL task."},
+    supports_model_evolution=False,
+)
+
 BENCHMARKS = {
     HUMANEVAL.name: HUMANEVAL,
     MBPP.name: MBPP,
+    BFCL.name: BFCL,
 }
 
 

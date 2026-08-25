@@ -117,15 +117,16 @@ def _task_evidence(
     )
     candidate = result.get("candidate_path")
     present = bool(candidate and Path(candidate).is_file())
+    artifact_expected = bool(result.get("artifact_expected", True))
     status = str(result.get("status", "unknown"))
     stop = str(generation.get("stop_reason", result.get("agent_stop_reason", "")))
     error = str(generation.get("agent_error") or result.get("stderr") or "")
     signals = [] if status == "pass" else [status]
     if stop == "max_steps":
         signals.append("max_steps")
-    if not present:
+    if artifact_expected and not present:
         signals.append("artifact_missing")
-    if created and not present:
+    if artifact_expected and created and not present:
         signals.append("artifact_created_then_missing")
     if error:
         signals.append("agent_error")

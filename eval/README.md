@@ -117,3 +117,36 @@ WORKERS=8 \
 本实现参考 CodeSensiQuant 的 MBPP 数据字段和测试程序构造，但不复用其 Transformers
 直接生成流程，也不加入其三样例提示。这里让每道题经过 Tinyagent 工具循环，以保持不同
 benchmark 的 Agent 行为、Evidence 和自进化反馈结构一致。
+
+## BFCL V4 multi-turn
+
+BFCL 使用官方 `multi_turn_base` 数据、状态后端和 checker，直接评估 Tinyagent 的多轮
+工具调用轨迹，不生成 `solution.py`。第三方源码固定在被 Git 忽略的 `eval/vendor/bfcl`：
+
+```bash
+./eval/setup_bfcl.sh
+```
+
+先运行小规模 baseline：
+
+```bash
+LIMIT=32 WORKERS=4 FORCE_RERUN=1 \
+  RUN_NAME=bfcl-v4-multiturn-base-32 \
+  ./eval/run_bfcl.sh
+```
+
+运行 Context、Tools 和 Architecture 三层自主进化：
+
+```bash
+strataevo \
+  --run-name bfcl-v4-multiturn-evolution-32 \
+  --branch evo_bfcl_v4 \
+  --benchmark bfcl \
+  --generations 3 \
+  --eval-limit 32 \
+  --eval-workers 4
+```
+
+也可以通过 `BFCL_ROOT` 指向已有的 Gorilla checkout。首版只支持无需 SerpAPI 的
+`multi_turn_base`；web-search、memory 和 Model repair 尚未接入，因此 BFCL 不能与
+`--enable-model-evolution` 同时使用。

@@ -192,6 +192,8 @@ def run_benchmark(
     description: str,
     dataset: str,
     split: str,
+    system_prompt: str = SYSTEM_PROMPT,
+    user_prompt: str = USER_PROMPT,
 ) -> int:
     """Run independent Agent tasks concurrently and persist common artifacts."""
     output_dir = Path(args.output_dir)
@@ -222,7 +224,11 @@ def run_benchmark(
         temperature=args.temperature,
         timeout=args.model_timeout,
     )
-    system_prompt, user_prompt = load_context_prompts(args.context_file)
+    system_prompt, user_prompt = load_context_prompts(
+        args.context_file,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
     tool_addenda = load_tool_profile(args.tool_profile_file)
 
     pending_tasks = [task for task in tasks if str(task["task_id"]) not in completed]
@@ -289,9 +295,14 @@ def run_benchmark(
     return 0
 
 
-def load_context_prompts(path: str | None) -> tuple[str, str]:
+def load_context_prompts(
+    path: str | None,
+    *,
+    system_prompt: str = SYSTEM_PROMPT,
+    user_prompt: str = USER_PROMPT,
+) -> tuple[str, str]:
     if not path:
-        return SYSTEM_PROMPT, USER_PROMPT
+        return system_prompt, user_prompt
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("context file must contain a JSON object")
@@ -301,8 +312,8 @@ def load_context_prompts(path: str | None) -> tuple[str, str]:
         raise ValueError("context addenda must be strings")
     system_addendum = system_addendum.strip()
     task_addendum = task_addendum.strip()
-    system_prompt = SYSTEM_PROMPT + (f"\n\n{system_addendum}" if system_addendum else "")
-    user_prompt = USER_PROMPT + (f"\n\n{task_addendum}" if task_addendum else "")
+    system_prompt += f"\n\n{system_addendum}" if system_addendum else ""
+    user_prompt += f"\n\n{task_addendum}" if task_addendum else ""
     return system_prompt, user_prompt
 
 

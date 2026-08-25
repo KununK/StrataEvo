@@ -107,6 +107,9 @@ strataevo --run-name mbpp-minimal-four-layer --generations 3 --resume
 - **Tools**：演化现有工具的模型可见描述。
 - **Architecture**：由自修改 Agent 修改 `src/tinyagent/`，验证后按 benchmark 分数晋级。
 
+除 HumanEval 和 MBPP 外，评测层已支持官方 BFCL V4 `multi_turn_base`，用于观察多轮
+工具调用和状态传递。首次运行前执行 `./eval/setup_bfcl.sh`，详见 `eval/README.md`。
+
 Model 层是在当前任务上进行 verifier-guided 测试时适应，不应被解释为 held-out 泛化结果。
 
 ## 阶段性实验结果

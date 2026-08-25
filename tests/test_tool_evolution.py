@@ -18,6 +18,9 @@ class FakeEvaluator:
     def set_tool_profile(self, profile):
         self.profiles.append(profile)
 
+    def available_tool_descriptions(self):
+        return {"read_file": "Read a UTF-8 text file."}
+
     def evaluate(self, output_dir):
         return EvaluationReport(next(self.scores), {}, str(output_dir), "evaluation.log")
 

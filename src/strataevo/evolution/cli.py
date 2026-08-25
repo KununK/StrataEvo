@@ -152,6 +152,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("repair-temperature must be between 0 and 2")
     if args.force_layer == "model" and not args.enable_model_evolution:
         raise ValueError("--force-layer model requires --enable-model-evolution")
+    if args.enable_model_evolution and not BENCHMARKS[args.benchmark].supports_model_evolution:
+        raise ValueError(f"{args.benchmark} does not support model evolution")
 
 
 if __name__ == "__main__":

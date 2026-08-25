@@ -53,6 +53,31 @@ class EvidenceTests(unittest.TestCase):
             self.assertIn("artifact_created_then_missing", bundle.cases[0].signals)
             self.assertTrue((root / "evidence.json").is_file())
 
+    def test_collector_does_not_require_artifacts_for_trajectory_benchmarks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "summary.json").write_text('{"evaluated": 1}', encoding="utf-8")
+            (root / "results.jsonl").write_text(
+                json.dumps(
+                    {
+                        "task_id": "task/1",
+                        "status": "incorrect_calls",
+                        "passed": False,
+                        "artifact_expected": False,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "generations.jsonl").write_text(
+                json.dumps({"task_id": "task/1", "messages": []}) + "\n",
+                encoding="utf-8",
+            )
+
+            bundle = CodingAgentEvidenceCollector().collect_and_write(root)
+
+            self.assertEqual(bundle.cases[0].signals, ["incorrect_calls"])
+
 
 if __name__ == "__main__":
     unittest.main()

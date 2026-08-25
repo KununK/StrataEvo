@@ -9,6 +9,7 @@ dist/
 .venv/
 eval/logs/
 eval/outputs/
+eval/vendor/
 evolution/runs/
 evolution/runs_*/
 evolution/runs_old_*/
