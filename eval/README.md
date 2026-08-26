@@ -135,7 +135,7 @@ LIMIT=32 WORKERS=4 FORCE_RERUN=1 \
   ./eval/run_bfcl.sh
 ```
 
-运行 Context、Tools 和 Architecture 三层自主进化：
+运行四层自主进化：
 
 ```bash
 strataevo \
@@ -144,9 +144,10 @@ strataevo \
   --benchmark bfcl \
   --generations 3 \
   --eval-limit 32 \
-  --eval-workers 4
+  --eval-workers 4 \
+  --enable-model-evolution
 ```
 
 也可以通过 `BFCL_ROOT` 指向已有的 Gorilla checkout。首版只支持无需 SerpAPI 的
-`multi_turn_base`；web-search、memory 和 Model repair 尚未接入，因此 BFCL 不能与
-`--enable-model-evolution` 同时使用。
+`multi_turn_base`。Model 层重新执行失败轨迹，并且只使用官方 checker 通过的轨迹训练
+LoRA；web-search 和 memory 类别尚未接入。

@@ -31,11 +31,9 @@ class BenchmarkEvaluationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown benchmark"):
                 create_evaluator(root, config)
 
-    def test_bfcl_rejects_unsupported_model_evolution(self):
+    def test_bfcl_supports_model_evolution(self):
         args = parse_args(["--benchmark", "bfcl", "--enable-model-evolution"])
-
-        with self.assertRaisesRegex(ValueError, "bfcl does not support model evolution"):
-            _validate_args(args)
+        _validate_args(args)
 
 
 if __name__ == "__main__":

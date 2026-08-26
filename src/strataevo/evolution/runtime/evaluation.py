@@ -256,7 +256,6 @@ BFCL = BenchmarkSpec(
     objective="Improve Tinyagent on executable BFCL V4 multi-turn tool-use tasks.",
     arguments=("--category", "multi_turn_base"),
     tool_descriptions={"*": "Task-specific executable tools supplied by each BFCL task."},
-    supports_model_evolution=False,
 )
 
 BENCHMARKS = {

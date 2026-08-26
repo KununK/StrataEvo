@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from eval.bfcl.execution import repair_task
 from eval.bfcl.official import format_call, locate_bfcl_root
 from eval.bfcl.run import run_agent_task
 from tinyagent import Message, ScriptedModel, Tool, ToolCall
@@ -87,6 +88,34 @@ class BFCLTests(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(observed, [[['lookup(value=3)']], [['lookup(value=4)']]])
         self.assertEqual(generation["function_calls"], observed)
+
+    def test_repair_task_passes_checker_feedback_to_retry(self):
+        observed = {}
+
+        def fake_run(task, model, candidate_path, **kwargs):
+            observed.update(kwargs)
+            return (
+                {"task_id": task["task_id"], "messages": []},
+                {"task_id": task["task_id"], "passed": True},
+            )
+
+        config = type("Config", (), {"benchmark_max_steps": 7})()
+        with patch("eval.bfcl.execution.run_agent_task", side_effect=fake_run):
+            generation, result = repair_task(
+                {"task_id": "task"},
+                {"status": "incorrect_calls", "stderr": "wrong argument"},
+                2,
+                Path("unused"),
+                ScriptedModel([]),
+                config,
+                "Preserve state between turns.",
+            )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(generation["repair_attempt"], 2)
+        self.assertEqual(observed["max_steps"], 7)
+        self.assertIn("wrong argument", observed["initial_guidance"])
+        self.assertIn("Preserve state between turns.", observed["initial_guidance"])
 
 if __name__ == "__main__":
     unittest.main()

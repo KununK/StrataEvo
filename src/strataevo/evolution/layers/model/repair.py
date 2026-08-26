@@ -1,4 +1,4 @@
-"""Collect verifier-passing repairs for failed coding tasks."""
+"""Collect verifier-passing repairs for failed tasks."""
 
 from __future__ import annotations
 
@@ -69,12 +69,17 @@ def collect_failed_task_repairs(
         _write_collection(destination, [], [], collection)
         return collection
 
-    run_agent_task = _load_eval_symbol(config.repo, "eval.coding_agent", "run_agent_task")
-    tasks, render_task, verify = _benchmark_adapter(
-        config.benchmark,
-        source / "config.json",
-        config.repo,
-    )
+    trajectory_repair = _trajectory_repair(config.benchmark, config.repo)
+    if trajectory_repair:
+        tasks = _benchmark_tasks(config.benchmark, source / "config.json", config.repo)
+        run_agent_task = render_task = verify = None
+    else:
+        run_agent_task = _load_eval_symbol(config.repo, "eval.coding_agent", "run_agent_task")
+        tasks, render_task, verify = _benchmark_adapter(
+            config.benchmark,
+            source / "config.json",
+            config.repo,
+        )
     tasks_by_id = {str(task["task_id"]): task for task in tasks}
     missing = sorted(failed.keys() - tasks_by_id.keys())
     if missing:
@@ -92,19 +97,26 @@ def collect_failed_task_repairs(
         futures = {}
         for task_id, failure in failed.items():
             for attempt in range(1, config.repair_attempts + 1):
-                future = executor.submit(
-                    _repair_once,
+                arguments = (
                     tasks_by_id[task_id],
                     failure,
                     attempt,
                     destination,
                     repair_model,
-                    run_agent_task,
-                    render_task,
-                    verify,
                     config,
                     guidance,
                 )
+                if trajectory_repair:
+                    future = executor.submit(trajectory_repair, *arguments)
+                else:
+                    future = executor.submit(
+                        _repair_once,
+                        *arguments[:5],
+                        run_agent_task,
+                        render_task,
+                        verify,
+                        *arguments[5:],
+                    )
                 futures[future] = (task_id, attempt)
         for future in as_completed(futures):
             generation, result = future.result()
@@ -192,10 +204,6 @@ def _benchmark_adapter(
     Callable[[dict[str, Any]], str],
     Callable[[dict[str, Any], str, float], dict[str, Any]],
 ]:
-    values = json.loads(config_path.read_text(encoding="utf-8"))
-    args = argparse.Namespace(**values)
-    tasks_path = config_path.parent / "tasks.jsonl"
-    saved_tasks = read_jsonl(tasks_path) if tasks_path.is_file() else None
     try:
         spec = BENCHMARKS[benchmark]
     except KeyError as error:
@@ -203,10 +211,30 @@ def _benchmark_adapter(
     run_module = _load_eval_module(repo, spec.module)
     evaluate_source = _load_eval_symbol(repo, spec.execution_module, "evaluate_source")
     return (
-        saved_tasks if saved_tasks is not None else run_module.load_tasks(args),
+        _benchmark_tasks(benchmark, config_path, repo),
         run_module.render_task_file,
         lambda task, source, timeout: evaluate_source(task, source, timeout=timeout),
     )
+
+
+def _benchmark_tasks(benchmark: str, config_path: Path, repo: str | Path) -> list[dict[str, Any]]:
+    tasks_path = config_path.parent / "tasks.jsonl"
+    if tasks_path.is_file():
+        return read_jsonl(tasks_path)
+    values = json.loads(config_path.read_text(encoding="utf-8"))
+    try:
+        spec = BENCHMARKS[benchmark]
+    except KeyError as error:
+        raise ValueError(f"repair collection does not support benchmark: {benchmark}") from error
+    return _load_eval_module(repo, spec.module).load_tasks(argparse.Namespace(**values))
+
+
+def _trajectory_repair(benchmark: str, repo: str | Path) -> Callable[..., Any] | None:
+    try:
+        spec = BENCHMARKS[benchmark]
+    except KeyError as error:
+        raise ValueError(f"repair collection does not support benchmark: {benchmark}") from error
+    return getattr(_load_eval_module(repo, spec.execution_module), "repair_task", None)
 
 
 def _load_eval_module(repo: str | Path, module: str) -> Any:

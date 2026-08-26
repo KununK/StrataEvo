@@ -58,6 +58,7 @@ def run_agent_task(
     system_prompt: str = SYSTEM_PROMPT,
     user_prompt: str = "",
     tool_description_addenda: dict[str, str] | None = None,
+    initial_guidance: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     del candidate_path, test_timeout
     started = time.perf_counter()
@@ -72,10 +73,12 @@ def run_agent_task(
     output = ""
     error = ""
     try:
-        for turn in task["question"]:
+        for turn_index, turn in enumerate(task["question"]):
             prompt = "\n".join(str(message.get("content", "")) for message in turn)
             if user_prompt:
                 prompt += "\n\n" + user_prompt
+            if turn_index == 0 and initial_guidance:
+                prompt += "\n\n" + initial_guidance
             result = agent.run(prompt, history=history)
             history = result.messages
             usage = usage + result.usage

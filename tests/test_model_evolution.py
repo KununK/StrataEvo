@@ -305,6 +305,55 @@ class ModelEvolutionTests(unittest.TestCase):
             self.assertEqual(tasks, [task])
             self.assertIn("TESTS =", render(tasks[0]))
 
+    def test_repair_collector_accepts_verified_trajectory_repair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evaluation = root / "evaluation"
+            evaluation.mkdir()
+            self._write_jsonl(
+                evaluation / "results.jsonl",
+                [{"task_id": "bfcl-task", "passed": False, "status": "incorrect_calls"}],
+            )
+            task = {"task_id": "bfcl-task", "question": []}
+
+            def repair(task, _failure, attempt, *_args):
+                return (
+                    {
+                        "task_id": task["task_id"],
+                        "messages": [{"role": "assistant"}],
+                        "repair_attempt": attempt,
+                    },
+                    {"task_id": task["task_id"], "passed": True, "repair_attempt": attempt},
+                )
+
+            config = EvolutionConfig(
+                repo=str(Path(__file__).resolve().parents[1]),
+                run_name="bfcl-repair",
+                benchmark="bfcl",
+                repair_attempts=1,
+                eval_workers=1,
+            )
+            with (
+                patch(
+                    "strataevo.evolution.layers.model.repair._trajectory_repair",
+                    return_value=repair,
+                ),
+                patch(
+                    "strataevo.evolution.layers.model.repair._benchmark_tasks",
+                    return_value=[task],
+                ),
+            ):
+                collection = collect_failed_task_repairs(
+                    config,
+                    evaluation,
+                    root / "repairs",
+                    model_name="test",
+                    model=ScriptedModel([]),
+                )
+
+            self.assertEqual(collection.repaired_tasks, ["bfcl-task"])
+            self.assertEqual(collection.successful_trajectories, 1)
+
     def test_repair_adapter_uses_registered_humaneval_renderer(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
