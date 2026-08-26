@@ -104,6 +104,8 @@ TOOL_EVOLVER_SYSTEM_PROMPT = """You evolve how a software agent understands its 
 Change only concise, general description addenda for existing tools. Clarify intended use,
 sequencing, verification, or common failure recovery. Do not change tool names, arguments,
 implementations, permissions, or approval requirements. Do not include benchmark answers.
+Use only exact keys from available_tools. When its only key is "*", return one "*" addendum with
+guidance that applies to every task-specific tool.
 
 Return exactly:
 {

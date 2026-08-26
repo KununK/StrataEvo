@@ -54,6 +54,21 @@ class ToolEvolutionTests(unittest.TestCase):
         self.assertEqual(metadata["input_tokens"], 20)
         self.assertIn("available_tools", model.requests[0][1].content)
 
+    def test_evolver_explains_dynamic_tool_wildcard(self):
+        model = ScriptedModel(
+            [Message("assistant", json.dumps({"description_addenda": {"*": "Check state."}}))]
+        )
+
+        profile, _metadata = ToolEvolver(model).create_candidate(
+            ToolProfile({}),
+            {"*": "Task-specific tools."},
+            self._decision(),
+            [],
+        )
+
+        self.assertEqual(profile.description_addenda, {"*": "Check state."})
+        self.assertIn('only key is "*"', model.requests[0][0].content)
+
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown tools"):
             ToolProfile.from_dict({"description_addenda": {"unknown": "guidance"}}, {"read_file"})
