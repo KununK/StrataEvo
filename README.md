@@ -4,8 +4,8 @@ StrataEvo 是一个最小四层自进化 Agent 研究基线。它评测当前 Ag
 问题，选择 Model、Context、Tools 或 Architecture 中的一层执行单项干预，并仅在任务分数
 明确提升时保留候选。
 
-当前 `main` 对应经过双数据集重复实验验证的阶段性四层基线。Context、Tools、Model、
-Architecture 均已产生真实、可验证的独立进化证据，自主层选择在重复多 Run 和全量实验中均能
+当前 `main` 对应经过 HumanEval、MBPP 和 BFCL 验证的阶段性四层基线。Context、Tools、Model、
+Architecture 均已产生真实、可验证的独立进化证据，自主层选择在代码生成和多轮工具任务上均能
 提升最终父代。该结论证明的是最小闭环具备初步四层自进化能力，不代表四层会在自然任务中均衡
 贡献，也不应解释为 held-out 泛化结果。
 
@@ -43,7 +43,7 @@ src/strataevo/evolution/
   mutator.py                      固定 MetaAgent 驱动的 Architecture 自修改
   layers/                         四层执行器
   runtime/                        Git、评测、结构化响应和自修改工作区
-eval/                             固定 HumanEval/MBPP 环境
+eval/                             HumanEval、MBPP 和 BFCL 评测环境
 tests/                            最小可信边界测试
 ```
 
@@ -123,12 +123,17 @@ Model 使用 4096-token SFT 长度：
 | MBPP | 136/192 | 171/192 | +35 | 3/3 |
 | 合计 | 287/384 | 344/384 | +57 | 6/6 |
 
-全量五代自主进化：
+完整基准测评：
 
-| 数据集 | Baseline | Final | 净增 |
-| --- | ---: | ---: | ---: |
-| HumanEval | 144/164 | 156/164 | +12 |
-| MBPP | 200/257 | 232/257 | +32 |
+| 数据集 | 任务数 | 代数 | Baseline | Final | 净增 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| HumanEval | 164 | 5 | 144/164 | 156/164 | +12 |
+| MBPP | 257 | 5 | 200/257 | 232/257 | +32 |
+| BFCL | 200 | 10 | 100/200 | 123/200 | +23 |
+
+BFCL 的主要收益来自 G2、G4 的 Context 候选，分别贡献 `+19、+2`。G7 Architecture 名义
+贡献 `+2`，但任务交换明显且修改与收益的因果关系较弱，因此只保留为协议观测，不作为自然
+Architecture 稳定进化证据。
 
 四层独立矩阵使用两个数据集、每层各 2 次独立运行、每次 3 代和 32 题。Context、Tools 和
 Model Executor 与矩阵父代保持一致；Architecture 在当前版本由后述受控实验重新验证：
@@ -140,11 +145,32 @@ Model Executor 与矩阵父代保持一致；Architecture 在当前版本由后�
 | Model | 23→23；27→27 | 20→20；20→26 | 1/4 |
 | Architecture（改动前自然任务） | 25→25；26→26 | 26→26；24→24 | 0/4 |
 
-当前版本将 Architecture Mutator 与可修改的任务 Agent 解耦，使用控制侧固定、候选不可修改的
-最小 MetaAgent。受控结构实验中，“第一批工具调用后提前终止”达到 3/3 修复，“工具结果覆盖
-历史消息”达到 3/4 修复，合计由改动前 0/7 提升到 6/7。Model 恢复 4096-token SFT 后，
-HumanEval 64 题两次分别提升 4、2 题，HumanEval/MBPP 全量强制层实验分别提升 7、33 题；
-自主组合中也产生一次真实 Model 晋级。
+BFCL 全量四层消融：
+
+| 层 | Baseline | Candidate / Final | 净增 | 结果 |
+| --- | ---: | ---: | ---: | --- |
+| Context | 95/200 | 97/200 | +2 | accepted |
+| Tools | 93/200 | 102/200 | +9 | accepted |
+| Model R1 | 96/200 | 116/200 | +20 | accepted |
+| Model R2 | 94/200 | 117/200 | +23 | accepted |
+| Architecture（自然任务） | 95/200 | 无可执行候选 | 0 | rejected / no-change |
+
+Architecture Mutator 与可修改的任务 Agent 解耦，使用控制侧固定、候选不可修改的最小
+MetaAgent。受控结构实验结果如下：
+
+| 受控缺陷 | 改进前 | 固定 MetaAgent | 结果 |
+| --- | ---: | ---: | --- |
+| 第一批工具调用后提前终止 | 0/3 修复 | 3/3 修复 | 恢复多轮工具循环 |
+| 工具结果覆盖历史消息 | 0/4 修复 | 3/4 修复 | 恢复工具结果追加语义 |
+| BFCL 提前终止，全量 200 题 | 10/200 | 89/200 | accepted，直接删除错误提前返回 |
+| BFCL 历史覆盖，全量 200 题 | 0/200 | 无可执行候选 | no-change，正确方向夹带过度修改 |
+
+重复受控实验合计由改进前 `0/7` 提高到 `6/7`。这证明固定 MetaAgent 能解除待修 Agent 缺陷
+同时破坏修复者的自指耦合；BFCL 一成一败则说明 Architecture 已具备真实修复能力，但最小 patch
+实现和自然失败定位仍不稳定。
+
+Model 恢复 4096-token SFT 后，HumanEval 64 题两次分别提升 4、2 题，HumanEval/MBPP 全量
+强制层实验分别提升 7、33 题；自主组合中也产生一次真实 Model 晋级。
 
 正式多 Run 的 30 代中，Context 选择 14 次并贡献主要收益，Architecture 选择 14 次，Model
 选择 2 次，Tools 未被选择。同父代离线反事实显示 Decision 偶尔会漏掉收益略高的 Model，但未
