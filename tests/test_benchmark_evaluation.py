@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from strataevo.evolution.cli import _validate_args, parse_args
 from strataevo.evolution.runtime.evaluation import BenchmarkEvaluator, create_evaluator
@@ -34,6 +35,32 @@ class BenchmarkEvaluationTests(unittest.TestCase):
     def test_bfcl_supports_model_evolution(self):
         args = parse_args(["--benchmark", "bfcl", "--enable-model-evolution"])
         _validate_args(args)
+
+    def test_split_defaults_to_test_for_existing_configs(self):
+        config = EvolutionConfig.from_dict({"repo": ".", "run_name": "old"})
+        self.assertEqual(config.eval_split, "test")
+        self.assertEqual(parse_args([]).eval_split, "test")
+
+    def test_non_test_split_requires_mbpp(self):
+        for benchmark in ("humaneval", "bfcl"):
+            with self.subTest(benchmark=benchmark):
+                args = parse_args(["--benchmark", benchmark, "--eval-split", "train"])
+                with self.assertRaisesRegex(ValueError, "only for MBPP"):
+                    _validate_args(args)
+        _validate_args(parse_args(["--benchmark", "mbpp", "--eval-split", "train"]))
+
+    def test_mbpp_evaluator_passes_selected_split(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = EvolutionConfig(repo=str(root), run_name="train", benchmark="mbpp",
+                                     eval_split="train")
+            evaluator = create_evaluator(root, config)
+            with patch("strataevo.evolution.runtime.evaluation.run_commands",
+                       return_value=(False, "captured")) as commands:
+                with self.assertRaises(RuntimeError):
+                    evaluator.evaluate(root / "evaluation")
+            command = commands.call_args.args[0][0]
+            self.assertEqual(command[command.index("--split") + 1], "train")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,7 +37,7 @@ class TransactionTests(unittest.TestCase):
                 FakeEvaluator(),
                 parent,
                 root / "generation",
-                [["python", "-m", "py_compile", str(source)]],
+                [[sys.executable, "-m", "py_compile", str(source)]],
                 1,
             )
 

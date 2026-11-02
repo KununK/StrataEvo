@@ -21,6 +21,7 @@ class EvolutionConfig:
     max_eval_attempts: int = 5
     mutable_paths: list[str] = field(default_factory=lambda: list(DEFAULT_MUTABLE_PATHS))
     eval_limit: int | None = None
+    eval_split: str = "test"
     eval_offset: int = 0
     eval_workers: int = 4
     benchmark_max_steps: int = 12

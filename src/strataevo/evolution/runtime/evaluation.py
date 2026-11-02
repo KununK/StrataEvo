@@ -214,6 +214,8 @@ class BenchmarkEvaluator:
             command.extend(["--tool-profile-file", str(profile_path)])
         if self.config.eval_limit is not None:
             command.extend(["--limit", str(self.config.eval_limit)])
+        if self.spec.name == "mbpp":
+            command.extend(["--split", self.config.eval_split])
         log_path = output_dir.parent / f"{output_dir.name}.log"
         passed, output = run_commands([command], self.repo, log_path, timeout=7_200)
         summary_path = output_dir / "summary.json"

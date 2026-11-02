@@ -1,224 +1,187 @@
-# StrataEvo
+<h1 align="center">StrataEvo</h1>
+<h3 align="center">A Unified Framework for Component-Wise Self-Evolution of LLM Agents</h3>
 
-StrataEvo 是一个最小四层自进化 Agent 研究基线。它评测当前 Agent，从真实任务轨迹中诊断
-问题，选择 Model、Context、Tools 或 Architecture 中的一层执行单项干预，并仅在任务分数
-明确提升时保留候选。
+<p align="center">
+  <strong>Turning task experience into continual improvement of the whole agent.</strong>
+</p>
 
-当前 `main` 对应经过 HumanEval、MBPP 和 BFCL 验证的阶段性四层基线。Context、Tools、Model、
-Architecture 均已产生真实、可验证的独立进化证据；不强制层选择的自主闭环在代码生成和多轮
-工具任务上均能提升最终父代。该结论证明的是最小闭环具备初步四层自进化能力，不代表四层会在
-自然任务中均衡贡献，也不应解释为 held-out 泛化结果。
+<p align="center">
+  <!-- Replace the two #resources links with the arXiv and Hugging Face URLs when published. -->
+  <a href="#resources"><img src="https://img.shields.io/badge/arXiv-Coming%20Soon-b31b1b?style=flat-square&logo=arxiv" alt="arXiv: coming soon"></a>
+  <a href="#resources"><img src="https://img.shields.io/badge/Hugging%20Face-Coming%20Soon-ffcc4d?style=flat-square&logo=huggingface&logoColor=black" alt="Hugging Face: coming soon"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-1f77b4?style=flat-square" alt="License: MIT"></a>
+  <a href="https://github.com/KununK/StrataEvo"><img src="https://img.shields.io/badge/GitHub-Code-24292f?style=flat-square&logo=github" alt="GitHub code"></a>
+</p>
 
-## 核心边界
+<p align="center">
+  <a href="#overview">Overview</a> ·
+  <a href="#results">Highlights</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#resources">Paper & Resources</a>
+</p>
 
-生产闭环只保留四项可信边界：
+**Can an agent learn to improve itself from its own successes and failures?**
 
-1. Git 对 Architecture 候选提供提交和整体回滚；
-2. 候选必须通过 Ruff、单元测试和 CLI 导入检查；
-3. 候选必须达到明确的 pass@1 晋级阈值；
-4. `state.json` 与 `memory.jsonl` 支持代际状态和断点续跑。
+StrataEvo brings **Model, Context, Tools, and Architecture** into a unified self-evolution framework.
+It identifies problems in execution traces, autonomously selects a component to modify, generates candidates,
+and uses task performance to determine which updates the next generation inherits.
+From model weights and task prompts to tool interfaces and control logic, all updates follow the same evolutionary loop.
 
-完整执行链：
+<p align="center">
+  <b>4 evolvable components</b> &nbsp; · &nbsp;
+  <b>3 main benchmarks</b> &nbsp; · &nbsp;
+  <b>Gains in 9/9 independent runs</b>
+</p>
 
-```text
-benchmark -> Evidence -> EvolutionDecision -> one layer executor
-          -> validation -> candidate benchmark -> accept or rollback -> state/memory
-```
+<a id="overview"></a>
+## Overview
 
-删除的机制包括派生 Causal Trace、run-level summary、Evaluation Contract、语义 no-op 推断、
-能力模板、旧记录兼容层、重复父子复测以及 Tinyagent 终端和事件接口。实验目录仍保存原始
-Evidence、Decision、候选 patch、验证日志和最终 record，便于离线分析，但这些 artifact
-不参与运行控制。
+<p align="center">
+  <img src="docs/assets/framework.png" width="100%" alt="StrataEvo: four-component self-evolution with a unified verification and inheritance loop">
+</p>
 
-## 目录
+**Execute, diagnose, improve, verify, inherit.** Each generation focuses on one component, with a fixed verifier evaluating candidates.
+Effective updates persist across tasks; candidates that are not promoted are rolled back to the parent state.
 
-```text
-src/tinyagent/                    最小模型、消息、工具循环和工作区
-src/strataevo/evolution/
-  cli.py                          多代进程监督
-  generation.py                   单代事务与四层分派
-  evidence.py                     任务结果和有序工具事件
-  decision.py                     原子的层选择、因果假设和干预
-  memory.py                       最小代际记忆
-  mutator.py                      固定 MetaAgent 驱动的 Architecture 自修改
-  layers/                         四层执行器
-  runtime/                        Git、评测、结构化响应和自修改工作区
-eval/                             HumanEval、MBPP 和 BFCL 评测环境
-tests/                            最小可信边界测试
-```
+| Component | How the agent improves itself |
+|---|---|
+| **Model** | Fine-tunes with LoRA using verifier-passing repairs and successful trajectories |
+| **Context** | Distills task experience into persistent system and task prompts |
+| **Tools** | Refines tool descriptions and usage guidance to improve tool selection and invocation |
+| **Architecture** | Uses an independent MetaAgent to modify the task agent's control flow and message-management code |
 
-Architecture 只允许修改 `src/tinyagent/`。评测器、测试、Decision 和晋级控制器固定，
-避免 Agent 通过修改奖励信号获得虚假提升。
+### Why StrataEvo?
 
-## 环境
+- **Improve the whole agent.** Four components are updated independently and inherited together, supporting both autonomous selection and component-level research.
+- **Put proposed changes to the test.** Prompts, tool descriptions, adapters, and source patches share a common verification, promotion, and rollback process.
+- **Go beyond code generation.** Systematic experiments span HumanEval, MBPP, and BFCL V4, with further transfer evaluation on SWE-bench Verified.
+- **Lightweight, open, and extensible.** A compact task agent and evolution controller preserve task trajectories, candidate changes, and generation-level results for reproduction and further research.
+
+<a id="results"></a>
+## Experimental Highlights
+
+All experiments use **Qwen3-Coder-30B-A3B-Instruct**. Self-evolution can be reproduced on a single NVIDIA A100 80GB GPU.
+
+### Autonomous Evolution: Improvements Across Three Benchmarks
+
+| Benchmark | Baseline | Final | Pass Rate Gain |
+|---|---:|---:|---:|
+| HumanEval | 144/164 (87.80%) | **156/164 (95.12%)** | **+7.32 pp** |
+| MBPP | 200/257 (77.82%) | **232/257 (90.27%)** | **+12.45 pp** |
+| BFCL V4 | 100/200 (50.00%) | **123/200 (61.50%)** | **+11.50 pp** |
+
+Across the benchmarks, StrataEvo passes **67 additional tasks**, raising the overall pass rate from **71.50% to 82.29%**.
+
+### Independent Replications: Net Gains in All 9 Runs
+
+Each benchmark is evaluated in 3 independent runs. The trajectories below show the selected component,
+candidate promotion, and retained performance at each generation.
+
+<p align="center">
+  <img src="docs/assets/independent_runs.png" width="100%" alt="Nine independent evolutionary runs on HumanEval, MBPP and BFCL V4">
+</p>
+
+Context, Tools, and Model all produce effective updates in the single-component experiments.
+Architecture achieves **10/12 successful repairs** across controlled premature-termination and history-overwrite defects.
+
+### Cross-Task Transfer: Evolve on the Training Set, Evaluate on New Tasks
+
+After evolution on MBPP train, the final state is fixed and evaluated directly on MBPP test, HumanEval, and SWE-bench Verified.
+
+| Target Set | Baseline | Final | Net Gain |
+|---|---:|---:|---:|
+| MBPP test | 198/257 | **230/257** | **+32** |
+| HumanEval | 135/164 | **152/164** | **+17** |
+| SWE-bench Verified | 161/500 | **171/500** | **+10** |
+
+See [Experimental Results](docs/experiments.md) for the full independent runs, four-component matrix, structural repairs, and transfer analysis.
+
+<a id="quick-start"></a>
+## Quick Start
+
+Requires Linux, Python 3.12, Git, [uv](https://docs.astral.sh/uv/), and an available model inference service.
+Local inference and LoRA training use NVIDIA GPUs.
+
+### Installation
 
 ```bash
-cd /data/vlm/jlk/Agent/StrataEvo
-source /data/vlm/jlk/switch-cuda.sh 12.9
+git clone https://github.com/KununK/StrataEvo.git
+cd StrataEvo
 uv sync --locked
+source .venv/bin/activate
 ```
 
-启动模型服务：
+### Start the Model Server
 
 ```bash
-./vllm_serve.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/serve.sh
 ```
 
-## 运行
+The default model is Qwen3-Coder-30B-A3B-Instruct, with tool calling and dynamic LoRA loading enabled.
+To use an existing OpenAI-compatible service, specify `--model` and `--base-url`.
 
-最小 smoke：
+### Run Self-Evolution
 
 ```bash
 strataevo \
-  --run-name humaneval-minimal-smoke \
-  --branch main \
+  --branch evo-demo \
+  --run-name humaneval-demo \
   --benchmark humaneval \
-  --generations 1 \
-  --eval-offset 110 \
+  --generations 3 \
   --eval-limit 20 \
-  --eval-workers 10
+  --eval-workers 4
 ```
 
-启用四层自主选择和 Model LoRA：
+This creates or switches to the experiment branch, evaluates the initial agent, and starts autonomous improvement.
+Keep the Git working tree clean before running.
+To enable autonomous selection across all four components, including Model training:
 
 ```bash
 strataevo \
-  --run-name mbpp-minimal-four-layer \
-  --branch main \
+  --branch evo-four-components \
+  --run-name mbpp-demo \
   --benchmark mbpp \
-  --generations 5 \
-  --eval-workers 10 \
+  --generations 3 \
+  --eval-limit 32 \
   --enable-model-evolution \
-  --sft-max-samples 64
+  --sft-device 1 \
+  --sft-max-length 4096
 ```
 
-继续运行：
+See the [Evaluation Guide](docs/evaluation.md) for more benchmarks, model configuration, and resume commands.
 
-```bash
-strataevo --run-name mbpp-minimal-four-layer --generations 3 --resume
-```
+## Supported Tasks
 
-`--force-layer` 仅用于验证单层链路，正式自主实验应省略。
+| Task Domain | Benchmark | Integration |
+|---|---|---|
+| Function and short-program generation | HumanEval, MBPP | File and shell tools for coding, followed by executable tests |
+| Multi-turn tool interaction | BFCL V4 `multi_turn_base` | Official function environment, state backend, and checker |
+| Repository-level software repair | SWE-bench Verified | Repository workspace and tools produce a patch, scored by an external SWE harness |
 
-## 四层
+HumanEval, MBPP, and BFCL have direct evaluation entry points.
+See [Cross-Benchmark Evaluation](docs/generalization.md#swe-bench-verified-integration) for SWE workspaces, patch generation, and test integration.
 
-- **Model**：对 verifier 通过的 repair trajectory 和成功 replay 进行 LoRA SFT。
-- **Context**：演化 system/task prompt addendum。
-- **Tools**：演化现有工具的模型可见描述。
-- **Architecture**：由自修改 Agent 修改 `src/tinyagent/`，验证后按 benchmark 分数晋级。
+## Learn More
 
-除 HumanEval 和 MBPP 外，评测层已支持官方 BFCL V4 `multi_turn_base`，用于观察多轮
-工具调用和状态传递。首次运行前执行 `./eval/setup_bfcl.sh`，详见 `eval/README.md`。
+| Document | Contents |
+|---|---|
+| [Evolution](docs/evolution.md) | Four components, verification, and cross-generation inheritance |
+| [Evaluation Guide](docs/evaluation.md) | Benchmark setup, commands, and result inspection |
+| [Experimental Results](docs/experiments.md) | Full paper results and configurations |
+| [Cross-Benchmark Evaluation](docs/generalization.md) | MBPP train evolution and SWE integration |
 
-Model 层是在当前任务上进行 verifier-guided 测试时适应，不应被解释为 held-out 泛化结果。
+We welcome reproduction results, new task environments, and new approaches to component-wise evolution
+through [Issues](https://github.com/KununK/StrataEvo/issues) and Pull Requests.
 
-## 阶段性实验结果
+<a id="resources"></a>
+## Paper & Resources
 
-所有主结果使用同一基础模型 `Qwen3-Coder-30B-A3B-Instruct`、本地 vLLM 和 10 个评测 worker。
-自主实验不指定 `--force-layer`；四层矩阵用该参数隔离单层能力。Model 采用 LoRA rank 8、1 epoch、
-学习率 `1e-4` 和 4096-token 最大训练长度。候选只有在固定验证通过且通过题数严格增加时才晋级。
+- **Paper**: *StrataEvo: A Unified Framework for Component-Wise Self-Evolution of LLM Agents*.
+- **arXiv**: Link coming soon.
+- **Hugging Face**: Resources coming soon.
+- **Code**: [KununK/StrataEvo](https://github.com/KununK/StrataEvo).
 
-以下只展示支撑阶段性结论的四组实验。参数探索、中断恢复、旧实现结果和诊断性中间实验均不列入
-主结果。
+## License
 
-### 1. 完整基准测评
-
-| 数据集 | 任务数 | 自主代数 | Baseline | Final | 净增益 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| HumanEval | 164 | 5 | 144/164（87.80%） | 156/164（95.12%） | +12 |
-| MBPP | 257 | 5 | 200/257（77.82%） | 232/257（90.27%） | +32 |
-| BFCL V4 `multi_turn_base` | 200 | 10 | 100/200（50.00%） | 123/200（61.50%） | +23 |
-
-HumanEval 在 G1、G3 接受 Context 候选，分别增加 10 题和 2 题；MBPP 在 G1 接受 Context
-候选并增加 32 题。BFCL 在 G2、G4 接受 Context 候选，分别增加 19 题和 2 题，并在 G7 接受
-一个增加 2 题的 Architecture 候选。三条轨迹的最终父代均高于各自 Baseline；持平和退化候选
-没有进入后续父代。
-
-### 2. 独立重复测评
-
-每条轨迹从基础模型和空演化状态独立开始，不继承其他 run 的 Context、Tools、Model 或源码状态。
-三个数据集均采用 `64 题 × 5 代 × 3 runs`，因此逐 run 展示而不使用合并分数：
-
-| 数据集 | Run | Baseline | Final | 净增益 | 是否提升 |
-| --- | ---: | ---: | ---: | ---: | --- |
-| HumanEval | R1 | 50/64 | 57/64 | +7 | 是 |
-| HumanEval | R2 | 50/64 | 58/64 | +8 | 是 |
-| HumanEval | R3 | 51/64 | 58/64 | +7 | 是 |
-| MBPP | R1 | 44/64 | 57/64 | +13 | 是 |
-| MBPP | R2 | 45/64 | 56/64 | +11 | 是 |
-| MBPP | R3 | 47/64 | 58/64 | +11 | 是 |
-| BFCL | R1 | 22/64 | 28/64 | +6 | 是 |
-| BFCL | R2 | 26/64 | 33/64 | +7 | 是 |
-| BFCL | R3 | 27/64 | 30/64 | +3 | 是 |
-
-九条独立轨迹均获得净提升。HumanEval 与 MBPP 的 30 代中，Context 被选择 14 次、Architecture
-14 次、Model 2 次；BFCL 的 15 代中，Architecture 被选择 13 次、Context 2 次。结果证明自主
-闭环能够重复获得收益，同时也表明自然层选择和贡献并不均衡。
-
-### 3. 三数据集四层矩阵
-
-矩阵实验使用 `--force-layer` 将候选限制在指定层，用于区分“该层能否进化”与“Decision 是否会
-选择该层”。HumanEval、MBPP 的 Context、Tools、Architecture 使用 `32 题 × 3 代 × 2 runs`；
-Model 使用复现更稳定的 `64 题 × 1 代 × 2 runs`。BFCL 使用全部 200 个任务。
-
-| 数据集 | 层 | 协议 | R1 | R1 净增 | R2 | R2 净增 | 提升单元 |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| HumanEval | Context | 32 题，3 代 | 25→27 | +2 | 22→28 | +6 | 2/2 |
-| HumanEval | Tools | 32 题，3 代 | 24→27 | +3 | 22→28 | +6 | 2/2 |
-| HumanEval | Model | 64 题，1 代 | 49→53 | +4 | 54→56 | +2 | 2/2 |
-| HumanEval | Architecture（自然） | 32 题，3 代 | 25→25 | 0 | 26→26 | 0 | 0/2 |
-| MBPP | Context | 32 题，3 代 | 18→27 | +9 | 23→28 | +5 | 2/2 |
-| MBPP | Tools | 32 题，3 代 | 22→25 | +3 | 20→27 | +7 | 2/2 |
-| MBPP | Model | 64 题，1 代 | 48→56 | +8 | 51→58 | +7 | 2/2 |
-| MBPP | Architecture（自然） | 32 题，3 代 | 26→26 | 0 | 24→24 | 0 | 0/2 |
-
-| 数据集 | 层 | 协议 | Baseline | Final / Candidate | 净增益 | 结果 |
-| --- | --- | --- | ---: | ---: | ---: | --- |
-| BFCL | Context | 全量 200 题 | 95/200 | 97/200 | +2 | 接受 |
-| BFCL | Tools | 全量 200 题 | 93/200 | 102/200 | +9 | 接受 |
-| BFCL | Model | 全量 200 题 | 94/200 | 117/200 | +23 | 接受 |
-| BFCL | Architecture（自然） | 全量 200 题 | 95/200 | 无可执行候选 | 0 | 拒绝 |
-
-Context、Tools 和 Model 在 HumanEval、MBPP 上均达到 `2/2` 独立提升，并在 BFCL 全量任务上
-分别获得 `+2`、`+9` 和 `+23`。三个数据集的自然任务均不能稳定暴露可定位的 Agent 控制流
-缺陷，因此 Architecture 的结构修复能力由下一组受控实验测量。
-
-### 4. 三数据集 Architecture 受控实验
-
-Architecture Mutator 与可修改的任务 Agent 解耦，由候选不可修改的固定最小 MetaAgent 执行修复。
-受控实验只注入两类通用控制流缺陷：第一批工具调用后提前终止，以及用工具结果覆盖原消息历史。
-
-| 数据集 | 受控缺陷 | Run | 缺陷 Baseline | 修复后 | 净增益 | 结果 |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| HumanEval | 历史覆盖 | R1 | 6/20 | 14/20 | +8 | 接受 |
-| HumanEval | 历史覆盖 | R2 | 7/20 | 7/20 | 0 | `no_change` |
-| MBPP | 提前终止 | R1 | 0/20 | 11/20 | +11 | 接受 |
-| MBPP | 提前终止 | R2 | 0/20 | 14/20 | +14 | 接受 |
-| MBPP | 提前终止 | R3 | 0/20 | 13/20 | +13 | 接受 |
-| MBPP | 历史覆盖 | R1 | 3/20 | 12/20 | +9 | 接受 |
-| MBPP | 历史覆盖 | R2 | 3/20 | 13/20 | +10 | 接受 |
-| BFCL | 提前终止 | 全量 | 10/200 | 89/200 | +79 | 接受 |
-| BFCL | 历史覆盖 | 全量 | 0/200 | 无可执行候选 | 0 | `no_change` |
-
-HumanEval 与 MBPP 的重复 probe 合计达到 `6/7` 修复成功，其中 MBPP 提前终止为 `3/3`，两数据集
-历史覆盖合计为 `3/4`。BFCL 提前终止获得 `+79`，历史覆盖未形成可执行候选。这说明固定
-MetaAgent 能解除“待修 Agent 缺陷同时破坏修复者”的自指耦合，但 Architecture 的最小 patch
-实现和自然失败定位仍未达到完全稳定。
-
-### 结论边界
-
-- 四个 Executor 均能产生真实候选，并具有独立状态、验证、拒绝和恢复语义。
-- Context、Tools、Model 已获得跨数据集自然任务收益；Architecture 已获得可复现的受控结构修复证据。
-- 三个数据集的独立重复测评达到 `9/9` 轨迹提升，自主组合收益具有初步可复现性。
-- 现有证据不支持“四层在所有自然任务中均衡、持续贡献”的更强结论；Architecture 的自然收益和
-  跨任务迁移仍是后续研究问题。
-
-完整实验过程、消融和失败经验记录在仓库外研究报告中，不属于运行时依赖。
-
-## 验证
-
-```bash
-.venv/bin/ruff check src tests eval
-.venv/bin/python -m pytest -q
-.venv/bin/python -m strataevo.evolution.cli --help
-```
+[MIT](LICENSE). Models and third-party benchmarks retain their respective licenses.
+Run model-generated code in an isolated experimental environment.

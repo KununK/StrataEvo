@@ -32,6 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mutator-rounds", type=int, default=5)
     parser.add_argument("--max-eval-attempts", type=int, default=5)
     parser.add_argument("--eval-limit", type=int)
+    parser.add_argument("--eval-split", choices=("train", "test", "validation"), default="test")
     parser.add_argument("--eval-offset", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--benchmark-max-steps", type=int, default=12)
@@ -75,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             run_name=run_name,
             branch=args.branch,
             benchmark=args.benchmark,
+            eval_split=args.eval_split,
             model=args.model,
             base_url=args.base_url,
             mutator_max_steps=args.mutator_max_steps,
@@ -146,6 +148,8 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise ValueError(f"{name} must be positive")
     if args.eval_offset < 0 or args.eval_limit is not None and args.eval_limit <= 0:
         raise ValueError("eval-offset must be non-negative and eval-limit must be positive")
+    if args.benchmark != "mbpp" and args.eval_split != "test":
+        raise ValueError("non-test evolution splits are currently supported only for MBPP")
     if args.sft_learning_rate <= 0:
         raise ValueError("sft-learning-rate must be positive")
     if not 0.0 <= args.repair_temperature <= 2.0:
